@@ -273,6 +273,37 @@ const T = (() => {
     }
   }
 
+  // Search — a PARAMETRIZED lens (§9.11): parametrized by the query, it derives
+  // matches across the twin's entities and renders them, reusing the existing
+  // action keys (tn:/sens:/doc:) so results are click-through to their views.
+  function search(query) {
+    const q = String(query || '').trim().toLowerCase();
+    clearViewer();
+    vadd('div', 'exp:note', 'explorer-root', 0); vset('exp:note', 'class', 'explorer-note');
+    if (!q) { vtext('exp:note', 'Search assets, sensors, events, and documents…'); return; }
+    const m = (v) => v != null && String(v).toLowerCase().includes(q);
+    const assets = rowsOf('assets').filter((r) => m(r.name) || m(r.description)).slice(0, 40);
+    const sensors = rowsOf('timeseries').filter((r) => m(r.externalId) || m(r.name) || m(r.description)).slice(0, 40);
+    const events = rowsOf('events').filter((r) => m(r.description) || m(r.type)).slice(0, 30);
+    const docs = ((sources.get('documents') || {}).docs || []).filter((d) => m(d.name)).slice(0, 40);
+    const total = assets.length + sensors.length + events.length + docs.length;
+    vtext('exp:note', `${total} match${total === 1 ? '' : 'es'} for “${query}”`);
+    let idx = 1;
+    const sec = (title, n) => {
+      vadd('div', `se:h${idx}`, 'explorer-root', idx); vset(`se:h${idx}`, 'class', 'ad-section'); vtext(`se:h${idx}`, `${title} — ${n}`); idx++;
+      const lk = `se:l${idx}`; vadd('div', lk, 'explorer-root', idx); vset(lk, 'class', 'sens-list'); idx++; return lk;
+    };
+    const card = (key, parent, i, name, sub) => {
+      vadd('div', key, parent, i); vset(key, 'class', 'sens-row');
+      vadd('span', `${key}:n`, key, 0); vset(`${key}:n`, 'class', 'sens-n'); vtext(`${key}:n`, name);
+      if (sub) { vadd('span', `${key}:s`, key, 1); vset(`${key}:s`, 'class', 'sens-u'); vtext(`${key}:s`, ' ' + sub); }
+    };
+    if (assets.length) { const lk = sec('Assets', assets.length); assets.forEach((a, i) => card(`tn:${a.id}`, lk, i, a.name || String(a.id), a.description)); }
+    if (sensors.length) { const lk = sec('Sensors', sensors.length); sensors.forEach((s, i) => { const k = `sens:${s.id}`; card(k, lk, i, s.externalId || s.name || String(s.id), s.unit ? `[${s.unit}]` : ''); vset(k, 'data-series', s.id); vset(k, 'data-label', s.externalId || s.name || s.id); }); }
+    if (docs.length) { const lk = sec('Documents', docs.length); docs.forEach((d, i) => card(`doc:${d.name}`, lk, i, d.name, '')); }
+    if (events.length) { const lk = sec('Events', events.length); events.forEach((e, i) => card(`se:ev${i}`, lk, i, `${fmtDate(e.startTime)} · ${e.type || ''}`.trim(), e.description || '')); }
+  }
+
   // document viewer: a gallery, then an embed of the chosen file (served at /file/<name>).
   function renderDocuments(s) {
     clearViewer();
@@ -342,6 +373,8 @@ const T = (() => {
       openDocument(String(e.name));
     } else if (e.type === 'open_asset' && e.id) {
       openAsset(String(e.id));
+    } else if (e.type === 'search') {
+      search(String(e.query || ''));
     }
   }
 

@@ -166,3 +166,17 @@ fn asset_dashboard_composes_sensors_and_events() {
     assert!(d.contains("sens:99") && d.contains("VAL-TT-1"), "sensor not linked by assetId");
     assert!(d.contains("seal swap"), "event not linked by assetIds");
 }
+
+#[test]
+fn search_is_a_parametrized_lens() {
+    let mut g = JsGraph::new_twin();
+    let a = std::env::temp_dir().join("se_assets.csv");
+    std::fs::write(&a, "id,parentId,name,description\n10,,Compressor,first stage seal\n11,,Pump,water\n").unwrap();
+    g.twin_read_source("assets", a.to_str().unwrap(), "mounted");
+    // parametrized by the query "seal"
+    g.twin_event(r#"{"type":"search","query":"seal"}"#);
+    let r = g.twin_from(0);
+    assert!(r.contains("1 match for") || r.contains("matches for"), "no result header: {}", &r[..r.len().min(120)]);
+    assert!(r.contains("tn:10") && r.contains("Compressor"), "seal-matching asset missing");
+    assert!(!r.contains("tn:11"), "non-matching asset should be excluded");
+}

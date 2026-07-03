@@ -39,7 +39,9 @@
   /* ---- main ---- */
   .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
   .topbar { padding: 14px 28px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; }
-  .topbar h1 { font-size: 14px; font-weight: 600; margin: 0; }
+  .topbar h1 { font-size: 14px; font-weight: 600; margin: 0; flex: none; }
+  .search-box { flex: 1; max-width: 420px; margin: 0 20px; border: 1px solid var(--line); background: var(--bg); border-radius: 9px; padding: 7px 12px; font: inherit; font-size: 13px; color: var(--ink); outline: none; }
+  .search-box:focus { border-color: var(--accent); }
   .status { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 7px; }
   .status .dot { width: 7px; height: 7px; border-radius: 50%; background: #ccc; }
   .status.live .dot { background: #4a9d5b; }
@@ -155,6 +157,7 @@
   <section class="main">
     <div class="topbar">
       <h1 id="viewtitle">Workspace</h1>
+      <input id="search" class="search-box" placeholder="Search the twin…" autocomplete="off">
       <div class="status" id="status"><span class="dot"></span><span id="statustext">connecting…</span></div>
     </div>
     <div class="feedwrap" id="feedwrap"><div class="feed" id="feed-root"></div></div>
@@ -294,6 +297,17 @@
   }
   document.querySelectorAll(".navitem").forEach((item) =>
     item.addEventListener("click", () => showView(item.dataset.view)));
+
+  // search — the parametrized lens, driven from the topbar (debounced)
+  const searchBox = document.getElementById("search");
+  let searchTimer;
+  searchBox.addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      showView("explorer", "Search");
+      send({ type: "search", query: searchBox.value.trim() });
+    }, 220);
+  });
 
   function openSource(name) {
     showView("explorer", name);
