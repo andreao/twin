@@ -147,3 +147,22 @@ fn asset_tree_and_events_timeline_render() {
     let tl = g.twin_from(0);
     assert!(tl.contains("chart-bar") && tl.contains("bar:0"), "no timeline bars");
 }
+
+#[test]
+fn asset_dashboard_composes_sensors_and_events() {
+    let mut g = JsGraph::new_twin();
+    let a = std::env::temp_dir().join("ad_assets.csv");
+    std::fs::write(&a, "id,parentId,name,description\n10,,Compressor,1st stage\n").unwrap();
+    let t = std::env::temp_dir().join("ad_ts.csv");
+    std::fs::write(&t, "id,externalId,name,unit,assetId,description\n99,VAL-TT-1,temp,degC,10,bearing\n").unwrap();
+    let e = std::env::temp_dir().join("ad_ev.csv");
+    std::fs::write(&e, "id,type,subtype,startTime,description,assetIds\n5,WO,repair,1674000000000,seal swap,10;77\n").unwrap();
+    g.twin_read_source("assets", a.to_str().unwrap(), "mounted");
+    g.twin_read_source("timeseries", t.to_str().unwrap(), "mounted");
+    g.twin_read_source("events", e.to_str().unwrap(), "mounted");
+    g.twin_event(r#"{"type":"open_asset","id":"10"}"#);
+    let d = g.twin_from(0);
+    assert!(d.contains("Compressor"), "no asset header");
+    assert!(d.contains("sens:99") && d.contains("VAL-TT-1"), "sensor not linked by assetId");
+    assert!(d.contains("seal swap"), "event not linked by assetIds");
+}

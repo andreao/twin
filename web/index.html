@@ -100,9 +100,20 @@
   .mode-btn.active { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); }
   /* asset hierarchy tree */
   .tree { font-size: 13px; line-height: 1.5; }
-  .tree-node { padding: 2px 0; white-space: nowrap; }
+  .tree-node { padding: 3px 6px; white-space: nowrap; cursor: pointer; border-radius: 5px; }
+  .tree-node:hover { background: var(--accent-soft); }
   .tree-name { font-weight: 550; }
   .tree-desc { color: var(--muted); }
+  /* asset dashboard */
+  .ad-name { font-size: 21px; font-weight: 650; margin-top: 6px; }
+  .ad-desc { color: var(--muted); font-size: 13px; margin-top: 3px; }
+  .ad-section { font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; margin: 24px 0 10px; }
+  .ad-empty { color: var(--muted); font-style: italic; font-size: 13px; }
+  .sens-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+  .sens-row { border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; cursor: pointer; background: var(--panel); transition: border-color .12s, background .12s; }
+  .sens-row:hover { border-color: var(--accent); background: var(--accent-soft); }
+  .sens-n { font-size: 12.5px; font-weight: 500; }
+  .sens-u { color: var(--muted); font-size: 12px; }
   /* document viewer lens */
   .doc-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-top: 12px; }
   .doc-item { border: 1px solid var(--line); border-radius: 10px; padding: 14px; cursor: pointer; background: var(--panel); transition: border-color .12s, background .12s; }
@@ -211,6 +222,9 @@
     else if (key.startsWith("doc:") && !key.endsWith(":n") && !key.endsWith(":t")) el.addEventListener("click", () => send({ type: "open_document", name: key.slice(4) }));
     else if (key === "exp:back") el.addEventListener("click", () => { showView("explorer", "documents"); send({ type: "open_source", name: "documents" }); });
     else if (key.startsWith("mode:")) el.addEventListener("click", () => { const [, name, mode] = key.split(":"); showView("explorer", name); send({ type: "open_source", name, mode }); });
+    else if (/^tn:[^:]+$/.test(key)) el.addEventListener("click", () => { showView("explorer", "Asset"); send({ type: "open_asset", id: key.slice(3) }); });
+    else if (/^sens:[^:]+$/.test(key)) el.addEventListener("click", () => { if (el.dataset.series) { showView("explorer", el.dataset.label || "Sensor"); send({ type: "chart_series", id: el.dataset.series, label: el.dataset.label || el.dataset.series }); } });
+    else if (key === "ad:back") el.addEventListener("click", () => { showView("explorer", "assets"); send({ type: "open_source", name: "assets", mode: "tree" }); });
   }
 
   function applyMutation(m) {

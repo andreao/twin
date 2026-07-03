@@ -230,6 +230,49 @@ const T = (() => {
     vadd('text', 'exp:ymin', 'exp:svg', 4); vset('exp:ymin', 'x', pad - 8); vset('exp:ymin', 'y', H - pad); vset('exp:ymin', 'class', 'chart-lbl'); vtext('exp:ymin', fmtNum(vmin));
   }
 
+  // Asset dashboard (§11.16 an application is a lens) — the core twin use-case:
+  // "everything about this equipment." Composes assets × timeseries (assetId) ×
+  // events (assetIds) so a click on a compressor shows its sensors + maintenance.
+  const fmtDate = (ms) => { const t = Number(ms); if (!t) return ''; const d = new Date(t); return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`; };
+  function rowsOf(name) { const id = sourceIds.get(name); return id === undefined ? [] : G.stateOf(id).support().map((r) => r.asObject()); }
+  function openAsset(assetId) {
+    const aid = String(assetId);
+    const asset = rowsOf('assets').find((r) => String(r.id) === aid);
+    if (!asset) return;
+    const sensors = rowsOf('timeseries').filter((r) => String(r.assetId) === aid);
+    const events = rowsOf('events')
+      .filter((r) => String(r.assetIds || '').split(';').includes(aid))
+      .sort((a, b) => Number(b.startTime) - Number(a.startTime));
+    clearViewer();
+    vadd('div', 'ad:back', 'explorer-root', 0); vset('ad:back', 'class', 'doc-back'); vtext('ad:back', '← back to hierarchy');
+    vadd('div', 'ad:hn', 'explorer-root', 1); vset('ad:hn', 'class', 'ad-name'); vtext('ad:hn', asset.name || aid);
+    vadd('div', 'ad:hd', 'explorer-root', 2); vset('ad:hd', 'class', 'ad-desc'); vtext('ad:hd', `${asset.description || ''}  ·  id ${aid}`);
+
+    vadd('div', 'ad:st', 'explorer-root', 3); vset('ad:st', 'class', 'ad-section'); vtext('ad:st', `Sensors — ${sensors.length}`);
+    vadd('div', 'ad:sl', 'explorer-root', 4); vset('ad:sl', 'class', 'sens-list');
+    if (!sensors.length) { vadd('div', 'ad:sn', 'ad:sl', 0); vset('ad:sn', 'class', 'ad-empty'); vtext('ad:sn', 'no sensors linked to this asset'); }
+    sensors.forEach((s, i) => {
+      const k = `sens:${s.id}`;
+      vadd('div', k, 'ad:sl', i); vset(k, 'class', 'sens-row'); vset(k, 'data-series', s.id); vset(k, 'data-label', s.externalId || s.name || s.id);
+      vadd('span', `${k}:n`, k, 0); vset(`${k}:n`, 'class', 'sens-n'); vtext(`${k}:n`, s.externalId || s.name || String(s.id));
+      if (s.unit) { vadd('span', `${k}:u`, k, 1); vset(`${k}:u`, 'class', 'sens-u'); vtext(`${k}:u`, ` [${s.unit}]`); }
+    });
+
+    vadd('div', 'ad:et', 'explorer-root', 5); vset('ad:et', 'class', 'ad-section'); vtext('ad:et', `Maintenance events — ${events.length}`);
+    vadd('div', 'ad:el', 'explorer-root', 6);
+    if (!events.length) { vadd('div', 'ad:en', 'ad:el', 0); vset('ad:en', 'class', 'ad-empty'); vtext('ad:en', 'no events linked (in the sampled events)'); }
+    else {
+      vadd('table', 'ad:etbl', 'ad:el', 0); vadd('tbody', 'ad:etb', 'ad:etbl', 0);
+      events.slice(0, 60).forEach((e, i) => {
+        const rk = `ade:${i}`;
+        vadd('tr', rk, 'ad:etb', i);
+        [fmtDate(e.startTime), e.type || '', e.subtype || '', e.description || ''].forEach((c, ci) => {
+          const ck = `${rk}:${ci}`; vadd('td', ck, rk, ci); vtext(ck, String(c));
+        });
+      });
+    }
+  }
+
   // document viewer: a gallery, then an embed of the chosen file (served at /file/<name>).
   function renderDocuments(s) {
     clearViewer();
@@ -297,6 +340,8 @@ const T = (() => {
       openSource(String(e.name), e.mode);
     } else if (e.type === 'open_document' && e.name) {
       openDocument(String(e.name));
+    } else if (e.type === 'open_asset' && e.id) {
+      openAsset(String(e.id));
     }
   }
 
