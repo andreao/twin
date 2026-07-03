@@ -1,0 +1,22 @@
+[package]
+name = "twin-runtime"
+version = "0.1.0"
+edition = "2021"
+description = "An Incremental Runtime — a content-addressed, branchable digital-twin substrate on raw V8 (design_doc.md §14)."
+
+[lib]
+name = "twin_runtime"
+path = "src/lib.rs"
+
+[[bin]]
+name = "twin"
+path = "src/main.rs"
+
+[dependencies]
+v8 = "130"
+sha2 = "0.10"
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
