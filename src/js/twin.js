@@ -31,7 +31,10 @@ const T = (() => {
     for (const [row] of delta.entries()) profile.set(row.get('field'), row.get('value'));
   });
   G.observe(skillsSrc, (delta) => {
-    for (const [row] of delta.entries()) skillsPanel.set(row.get('name'), row.get('title'), row.get('description'));
+    for (const [row] of delta.entries()) {
+      const s = skills.get(row.get('name'));
+      skillsPanel.set(row.get('name'), row.get('title'), row.get('description'), s ? s.files : []);
+    }
   });
 
   const sourceIds = new Map(); // name -> graph source node id

@@ -124,22 +124,27 @@ class SkillsPanel {
   }
   _emit(m) { TWIN_MUT.push(m); }
 
-  set(name, title, description) {
+  set(name, title, description, files) {
+    const filesText = files && files.length ? `tooling: ${files.join(', ')}` : '';
     if (this.names.has(name)) {
       this._emit({ op: 'setText', key: `sk:${name}:n`, text: title });
       this._emit({ op: 'setText', key: `sk:${name}:d`, text: description });
+      this._emit({ op: 'setText', key: `sk:${name}:f`, text: filesText });
       return;
     }
     const i = this.names.size;
     this.names.set(name, title);
     const rk = `sk:${name}`;
     this._emit({ op: 'create', key: rk, tag: 'div', parent: this.root, index: i });
-    this._emit({ op: 'setAttr', key: rk, name: 'class', value: 'src-row' });
+    this._emit({ op: 'setAttr', key: rk, name: 'class', value: 'src-row skill-card' });
     this._emit({ op: 'create', key: `${rk}:n`, tag: 'div', parent: rk, index: 0 });
     this._emit({ op: 'setAttr', key: `${rk}:n`, name: 'class', value: 'src-n' });
     this._emit({ op: 'setText', key: `${rk}:n`, text: title });
     this._emit({ op: 'create', key: `${rk}:d`, tag: 'div', parent: rk, index: 1 });
     this._emit({ op: 'setAttr', key: `${rk}:d`, name: 'class', value: 'src-d' });
     this._emit({ op: 'setText', key: `${rk}:d`, text: description });
+    this._emit({ op: 'create', key: `${rk}:f`, tag: 'div', parent: rk, index: 2 });
+    this._emit({ op: 'setAttr', key: `${rk}:f`, name: 'class', value: 'skill-files' });
+    this._emit({ op: 'setText', key: `${rk}:f`, text: filesText });
   }
 }

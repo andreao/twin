@@ -56,6 +56,9 @@
   .data-grid .src-row:hover { border-color: var(--accent); background: var(--accent-soft); }
   .data-grid .src-n { font-size: 15px; font-weight: 600; text-transform: capitalize; }
   .data-grid .src-d { font-size: 12.5px; margin-top: 4px; }
+  #skills-root .src-row { cursor: default; }
+  #skills-root .src-row:hover { border-color: var(--line); background: var(--panel); }
+  .skill-files { font-size: 11px; color: var(--muted); margin-top: 10px; font-family: ui-monospace, "SF Mono", monospace; }
 
   .feedwrap { flex: 1; min-height: 0; overflow-y: auto; }
   .feed { max-width: 720px; margin: 0 auto; padding: 28px 28px 8px; display: flex; flex-direction: column; gap: 4px; }
@@ -117,12 +120,11 @@
     <div class="nav">
       <div class="navitem active" data-view="workspace">Workspace</div>
       <div class="navitem" data-view="data">Data</div>
+      <div class="navitem" data-view="skills">Skills</div>
       <div class="navitem" data-view="artifacts">Artifacts</div>
       <div class="navitem" data-view="tasks">Tasks</div>
       <div class="navitem" data-view="scheduled">Scheduled</div>
     </div>
-    <div class="navlabel">Skills</div>
-    <div class="sources" id="skills-root"></div>
     <div class="navlabel">About you</div>
     <div class="profile" id="profile-root"></div>
   </aside>
@@ -134,6 +136,7 @@
     </div>
     <div class="feedwrap" id="feedwrap"><div class="feed" id="feed-root"></div></div>
     <div class="datapage" id="data-view" hidden><div id="sources-root" class="data-grid"></div></div>
+    <div class="datapage" id="skills-view" hidden><div id="skills-root" class="data-grid"></div></div>
     <div class="section-view" id="section-view" hidden><div class="empty" id="section-empty"></div></div>
     <div class="explorer" id="explorer-view" hidden><div id="explorer-root"></div></div>
     <div class="working" id="working"><span class="spin"></span> the agent is thinking…</div>
@@ -166,6 +169,7 @@
   const sectionEmpty = document.getElementById("section-empty");
   const explorerView = document.getElementById("explorer-view");
   const dataView = document.getElementById("data-view");
+  const skillsView = document.getElementById("skills-view");
   const viewTitle = document.getElementById("viewtitle");
   const composer = document.getElementById("composer");
 
@@ -256,6 +260,7 @@
     composer.hidden = !isWorkspace;
     workingEl.style.display = isWorkspace ? "" : "none";
     dataView.hidden = view !== "data";
+    skillsView.hidden = view !== "skills";
     sectionView.hidden = !isSection;
     explorerView.hidden = view !== "explorer";
     if (isSection) { const [t, b] = SECTIONS[view]; sectionEmpty.innerHTML = `<b>${t}</b>${b}`; }
