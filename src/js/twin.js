@@ -103,11 +103,22 @@ const T = (() => {
   const vtext = (key, text) => TWIN_MUT.push({ op: 'setText', key, text });
   const fmtNum = (n) => (Math.abs(n) >= 1000 || Number.isInteger(n)) ? n.toFixed(0) : Number(n.toPrecision(4)).toString();
 
-  function openSource(name) {
+  function openSource(name, mode) {
     const s = sources.get(name);
     if (!s) return;
     if (s.kind === 'documents') return renderDocuments(s);
+    if (mode === 'tree' && name === 'assets') return renderTree(name, s);
+    if (mode === 'timeline' && name === 'events') return renderTimeline(name, s);
     renderTable(name, s);
+  }
+
+  // per-source view modes (§11.15: several lenses over the same data)
+  const MODES = { assets: [['table', 'Table'], ['tree', 'Hierarchy']], events: [['table', 'Table'], ['timeline', 'Timeline']] };
+  function renderModes(name, current) {
+    const modes = MODES[name];
+    if (!modes) return;
+    vadd('div', 'exp:modes', 'explorer-root', 0); vset('exp:modes', 'class', 'view-modes');
+    modes.forEach(([m, lbl], i) => { const k = `mode:${name}:${m}`; vadd('button', k, 'exp:modes', i); vset(k, 'class', 'mode-btn' + (m === current ? ' active' : '')); vtext(k, lbl); });
   }
 
   function renderTable(name, s) {
@@ -117,9 +128,10 @@ const T = (() => {
     const cols = Object.keys(s.schema);
     const chartable = name === 'timeseries'; // a sensor row → chart its datapoints
     clearViewer();
-    vadd('div', 'exp:note', 'explorer-root', 0); vset('exp:note', 'class', 'explorer-note');
+    renderModes(name, 'table');
+    vadd('div', 'exp:note', 'explorer-root', 1); vset('exp:note', 'class', 'explorer-note');
     vtext('exp:note', `${residenceLabel(s)} · ${cols.length} columns · showing ${rows.length} of ${s.rowcount} rows${chartable ? ' · click a sensor to chart it' : ''}`);
-    vadd('table', 'exp:tbl', 'explorer-root', 1);
+    vadd('table', 'exp:tbl', 'explorer-root', 2);
     vadd('thead', 'exp:thead', 'exp:tbl', 0);
     vadd('tr', 'exp:htr', 'exp:thead', 0);
     cols.forEach((c, i) => { vadd('th', `exp:th:${i}`, 'exp:htr', i); vtext(`exp:th:${i}`, c); });
@@ -130,6 +142,65 @@ const T = (() => {
       if (chartable) { vset(rk, 'class', 'chartable'); vset(rk, 'data-series', row.id); vset(rk, 'data-label', row.externalId || row.name || row.id); }
       cols.forEach((c, ci) => { const ck = `exp:c:${ri}:${ci}`; vadd('td', ck, rk, ci); vtext(ck, row[c] == null ? '' : String(row[c])); });
     });
+  }
+
+  // asset hierarchy tree (§11.15) — the equipment structure of the twin
+  function renderTree(name, s) {
+    const id = sourceIds.get(name);
+    if (id === undefined) return;
+    const rows = G.stateOf(id).support().map((r) => r.asObject());
+    clearViewer();
+    renderModes(name, 'tree');
+    vadd('div', 'exp:note', 'explorer-root', 1); vset('exp:note', 'class', 'explorer-note');
+    vtext('exp:note', `asset hierarchy · ${rows.length} equipment items`);
+    const byId = new Map(rows.map((r) => [String(r.id), r]));
+    const kids = new Map(); const roots = [];
+    rows.forEach((r) => {
+      const p = r.parentId != null ? String(r.parentId) : null;
+      if (p && byId.has(p)) { (kids.get(p) || kids.set(p, []).get(p)).push(r); } else { roots.push(r); }
+    });
+    vadd('div', 'exp:tree', 'explorer-root', 2); vset('exp:tree', 'class', 'tree');
+    let idx = 0;
+    const emit = (r, depth) => {
+      const k = `tn:${r.id}`;
+      vadd('div', k, 'exp:tree', idx++); vset(k, 'class', 'tree-node'); vset(k, 'style', `padding-left:${depth * 20 + 4}px`);
+      vadd('span', `${k}:nm`, k, 0); vset(`${k}:nm`, 'class', 'tree-name'); vtext(`${k}:nm`, r.name || String(r.id));
+      if (r.description) { vadd('span', `${k}:d`, k, 1); vset(`${k}:d`, 'class', 'tree-desc'); vtext(`${k}:d`, ' — ' + r.description); }
+      (kids.get(String(r.id)) || []).forEach((c) => emit(c, depth + 1));
+    };
+    roots.forEach((r) => emit(r, 0));
+  }
+
+  // events timeline (§11.15) — a bar chart of maintenance activity over time
+  function renderTimeline(name, s) {
+    const id = sourceIds.get(name);
+    if (id === undefined) return;
+    const rows = G.stateOf(id).support().map((r) => r.asObject());
+    clearViewer();
+    renderModes(name, 'timeline');
+    const buckets = new Map(); let lo = null, hi = null;
+    rows.forEach((r) => {
+      const t = Number(r.startTime); if (!t) return;
+      const d = new Date(t), m = d.getUTCFullYear() * 12 + d.getUTCMonth();
+      buckets.set(m, (buckets.get(m) || 0) + 1);
+      if (lo === null || m < lo) lo = m; if (hi === null || m > hi) hi = m;
+    });
+    vadd('div', 'exp:note', 'explorer-root', 1); vset('exp:note', 'class', 'explorer-note');
+    if (lo === null) { vtext('exp:note', `${rows.length} events · none are dated`); return; }
+    const months = []; for (let m = lo; m <= hi; m++) months.push(m);
+    const counts = months.map((m) => buckets.get(m) || 0);
+    const maxC = Math.max(...counts, 1);
+    const mstr = (m) => `${Math.floor(m / 12)}-${String((m % 12) + 1).padStart(2, '0')}`;
+    vtext('exp:note', `${rows.length} events (sample) · ${months.length} months · ${mstr(lo)} → ${mstr(hi)} · peak ${maxC}/mo`);
+    const W = 1000, H = 340, pad = 44, bw = (W - 2 * pad) / months.length;
+    vadd('svg', 'exp:svg', 'explorer-root', 2); vset('exp:svg', 'viewBox', `0 0 ${W} ${H}`); vset('exp:svg', 'class', 'chart');
+    vadd('line', 'exp:ax', 'exp:svg', 0); vset('exp:ax', 'x1', pad); vset('exp:ax', 'y1', H - pad); vset('exp:ax', 'x2', W - pad); vset('exp:ax', 'y2', H - pad); vset('exp:ax', 'class', 'chart-axis');
+    months.forEach((m, i) => {
+      const c = counts[i], h = (c / maxC) * (H - 2 * pad), x = pad + i * bw, y = (H - pad) - h, k = `bar:${i}`;
+      vadd('rect', k, 'exp:svg', i + 1); vset(k, 'x', x + 1); vset(k, 'y', y); vset(k, 'width', Math.max(bw - 2, 1)); vset(k, 'height', h); vset(k, 'class', 'chart-bar');
+    });
+    vadd('text', 'exp:lmin', 'exp:svg', months.length + 1); vset('exp:lmin', 'x', pad); vset('exp:lmin', 'y', H - pad + 16); vset('exp:lmin', 'class', 'chart-xlbl'); vtext('exp:lmin', mstr(lo));
+    vadd('text', 'exp:lmax', 'exp:svg', months.length + 2); vset('exp:lmax', 'x', W - pad); vset('exp:lmax', 'y', H - pad + 16); vset('exp:lmax', 'class', 'chart-xlbl endlbl'); vtext('exp:lmax', mstr(hi));
   }
 
   function chartMessage(label, msg) {
@@ -223,7 +294,7 @@ const T = (() => {
       const opt = q && q.options ? q.options[idx] : null;
       append('user', { text: opt != null ? String(opt) : `option ${idx + 1}` });
     } else if (e.type === 'open_source' && e.name) {
-      openSource(String(e.name));
+      openSource(String(e.name), e.mode);
     } else if (e.type === 'open_document' && e.name) {
       openDocument(String(e.name));
     }

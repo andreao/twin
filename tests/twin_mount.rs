@@ -126,3 +126,24 @@ fn parametrized_datapoints_lens_fetches_on_demand() {
         assert!(std::path::Path::new("data/cognite/datapoints/1009048440794092.csv").exists(), "should cache locally");
     }
 }
+
+#[test]
+fn asset_tree_and_events_timeline_render() {
+    let mut g = JsGraph::new_twin();
+    // assets → hierarchy tree
+    let apath = std::env::temp_dir().join("twin_assets.csv");
+    std::fs::write(&apath, "id,parentId,name,description\n1,,Platform,root\n2,1,Compressor,stage1\n3,2,Seal,gas\n").unwrap();
+    g.twin_read_source("assets", apath.to_str().unwrap(), "mounted");
+    g.twin_event(r#"{"type":"open_source","name":"assets","mode":"tree"}"#);
+    let t = g.twin_from(0);
+    assert!(t.contains("exp:tree") && t.contains("tn:2") && t.contains("Compressor"), "no asset tree");
+    assert!(t.contains("mode:assets:tree"), "no mode switcher");
+
+    // events → timeline bar chart
+    let epath = std::env::temp_dir().join("twin_events.csv");
+    std::fs::write(&epath, "id,type,startTime\n1,x,1674000000000\n2,x,1676700000000\n3,y,1674000500000\n").unwrap();
+    g.twin_read_source("events", epath.to_str().unwrap(), "mounted");
+    g.twin_event(r#"{"type":"open_source","name":"events","mode":"timeline"}"#);
+    let tl = g.twin_from(0);
+    assert!(tl.contains("chart-bar") && tl.contains("bar:0"), "no timeline bars");
+}

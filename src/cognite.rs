@@ -86,9 +86,10 @@ pub fn fetch_series(id: &str, days: i64) -> Result<Vec<(i64, f64)>, String> {
     // anchor at where the data actually is
     let latest = post_with_retry("/timeseries/data/latest", &format!(r#"{{"items":[{{"id":{id}}}]}}"#))?;
     let lv: Value = serde_json::from_str(&latest).map_err(|e| format!("bad response: {e}"))?;
-    let end = lv["items"][0]["datapoints"][0]["timestamp"]
-        .as_i64()
-        .ok_or("this sensor has no datapoints at all")?;
+    let end = match lv["items"][0]["datapoints"][0]["timestamp"].as_i64() {
+        Some(t) => t,
+        None => return Ok(Vec::new()), // genuinely empty — not an error
+    };
     let start = end - days * 86_400_000;
     let body = format!(r#"{{"items":[{{"id":{id}}}],"start":{start},"end":{},"limit":100000}}"#, end + 1);
     let resp = post_with_retry("/timeseries/data/list", &body)?;

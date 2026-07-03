@@ -91,6 +91,18 @@
   .chart-line { fill: none; stroke: var(--accent); stroke-width: 1.5; }
   .chart-axis { stroke: var(--line); stroke-width: 1; }
   .chart-lbl { fill: var(--muted); font-size: 11px; text-anchor: end; }
+  .chart-bar { fill: var(--accent); opacity: .82; }
+  .chart-xlbl { fill: var(--muted); font-size: 11px; }
+  .chart-xlbl.endlbl { text-anchor: end; }
+  /* view-mode switcher */
+  .view-modes { display: flex; gap: 6px; margin-bottom: 14px; }
+  .mode-btn { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 5px 13px; font: inherit; font-size: 12.5px; color: var(--muted); cursor: pointer; }
+  .mode-btn.active { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); }
+  /* asset hierarchy tree */
+  .tree { font-size: 13px; line-height: 1.5; }
+  .tree-node { padding: 2px 0; white-space: nowrap; }
+  .tree-name { font-weight: 550; }
+  .tree-desc { color: var(--muted); }
   /* document viewer lens */
   .doc-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-top: 12px; }
   .doc-item { border: 1px solid var(--line); border-radius: 10px; padding: 14px; cursor: pointer; background: var(--panel); transition: border-color .12s, background .12s; }
@@ -198,6 +210,7 @@
     else if (/^exp:r:\d+$/.test(key)) el.addEventListener("click", () => { if (el.dataset.series) send({ type: "chart_series", id: el.dataset.series, label: el.dataset.label || el.dataset.series }); });
     else if (key.startsWith("doc:") && !key.endsWith(":n") && !key.endsWith(":t")) el.addEventListener("click", () => send({ type: "open_document", name: key.slice(4) }));
     else if (key === "exp:back") el.addEventListener("click", () => { showView("explorer", "documents"); send({ type: "open_source", name: "documents" }); });
+    else if (key.startsWith("mode:")) el.addEventListener("click", () => { const [, name, mode] = key.split(":"); showView("explorer", name); send({ type: "open_source", name, mode }); });
   }
 
   function applyMutation(m) {
