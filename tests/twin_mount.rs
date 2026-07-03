@@ -180,3 +180,23 @@ fn search_is_a_parametrized_lens() {
     assert!(r.contains("tn:10") && r.contains("Compressor"), "seal-matching asset missing");
     assert!(!r.contains("tn:11"), "non-matching asset should be excluded");
 }
+
+#[test]
+fn hierarchy_rolls_up_links_and_agent_can_inspect() {
+    let mut g = JsGraph::new_twin();
+    let a = std::env::temp_dir().join("h_assets.csv");
+    std::fs::write(&a, "id,parentId,name\n1,,Platform\n2,1,Compressor\n").unwrap();
+    let t = std::env::temp_dir().join("h_ts.csv");
+    std::fs::write(&t, "id,name,unit,assetId\n9,temp,degC,2\n").unwrap();
+    g.twin_read_source("assets", a.to_str().unwrap(), "mounted");
+    g.twin_read_source("timeseries", t.to_str().unwrap(), "mounted");
+    // tree rolls the sensor up to the Platform subtree
+    g.twin_event(r#"{"type":"open_source","name":"assets","mode":"tree"}"#);
+    let tree = g.twin_from(0);
+    assert!(tree.contains("tn:1:dot") && tree.contains("tn:1:b"), "no rollup badge on parent");
+    assert!(tree.contains("1 sensors"), "sensor not rolled up: check badge text");
+    // agent inspect tool computes stats
+    g.twin_agent_tool(r#"{"tool":"inspect","args":{"source":"timeseries"}}"#);
+    let feed = g.twin_from(0);
+    assert!(feed.contains("Inspected") && feed.contains("timeseries"), "inspect did not run");
+}

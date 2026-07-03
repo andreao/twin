@@ -35,6 +35,7 @@ You act ONLY by emitting exactly ONE JSON object per turn — no prose outside i
 - {"tool":"ask","args":{"question":"...","options":["...","..."]}}  ask ONE focused question; "options" are optional quick-picks. After you ask, you pause for the user.
 - {"tool":"record_profile","args":{"field":"...","value":"..."}}  save a durable fact you learned about the user into the twin (e.g. field "role", "goal", "industry", "data"). Do this the moment you learn something.
 - {"tool":"read_source","args":{"path":"/absolute/path/to/file.csv"}}  mount a local data file (CSV, JSON, or JSONL) into the twin. This federates it (no copy); it then appears in your perception under "sources" with its schema and a sample. Use it once the user gives you a path.
+- {"tool":"inspect","args":{"source":"<name>"}}  compute quick stats (row count, numeric column ranges) over a mounted source; the result appears in the feed so you can then summarize it for the user. Use it to actually analyze the twin's data before making claims about it.
 
 You perceive the twin as JSON each turn: "profile" (what you know about the user), "sources" (mounted data with schema + sample rows), "skills" (capabilities you have — e.g. obtain-oid pulls real oil-&-gas platform data), and "feed" (the conversation so far). A turn ends when you say or ask; think / record_profile / read_source continue the turn, so you can (e.g.) read_source and THEN say what you found in one turn.
 

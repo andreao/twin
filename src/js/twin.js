@@ -144,7 +144,8 @@ const T = (() => {
     });
   }
 
-  // asset hierarchy tree (§11.15) — the equipment structure of the twin
+  // asset hierarchy tree (§11.15) — the equipment structure, enriched at a glance with
+  // per-subtree sensor + maintenance-event counts (rolled up over the links).
   function renderTree(name, s) {
     const id = sourceIds.get(name);
     if (id === undefined) return;
@@ -152,20 +153,31 @@ const T = (() => {
     clearViewer();
     renderModes(name, 'tree');
     vadd('div', 'exp:note', 'explorer-root', 1); vset('exp:note', 'class', 'explorer-note');
-    vtext('exp:note', `asset hierarchy · ${rows.length} equipment items`);
+    vtext('exp:note', `asset hierarchy · ${rows.length} equipment items · • = instrumented · counts roll up the subtree`);
     const byId = new Map(rows.map((r) => [String(r.id), r]));
     const kids = new Map(); const roots = [];
     rows.forEach((r) => {
       const p = r.parentId != null ? String(r.parentId) : null;
       if (p && byId.has(p)) { (kids.get(p) || kids.set(p, []).get(p)).push(r); } else { roots.push(r); }
     });
+    // link indexes (sensors by assetId, events by assetIds), rolled up per subtree
+    const sByA = new Map(); rowsOf('timeseries').forEach((t) => { const a = String(t.assetId); sByA.set(a, (sByA.get(a) || 0) + 1); });
+    const eByA = new Map(); rowsOf('events').forEach((e) => String(e.assetIds || '').split(';').forEach((a) => { if (a) eByA.set(a, (eByA.get(a) || 0) + 1); }));
+    const sub = new Map();
+    const roll = (r) => {
+      let sc = sByA.get(String(r.id)) || 0, ec = eByA.get(String(r.id)) || 0;
+      (kids.get(String(r.id)) || []).forEach((c) => { const cv = roll(c); sc += cv.s; ec += cv.e; });
+      const v = { s: sc, e: ec }; sub.set(String(r.id), v); return v;
+    };
+    roots.forEach(roll);
     vadd('div', 'exp:tree', 'explorer-root', 2); vset('exp:tree', 'class', 'tree');
     let idx = 0;
     const emit = (r, depth) => {
-      const k = `tn:${r.id}`;
+      const k = `tn:${r.id}`, v = sub.get(String(r.id)) || { s: 0, e: 0 };
       vadd('div', k, 'exp:tree', idx++); vset(k, 'class', 'tree-node'); vset(k, 'style', `padding-left:${depth * 20 + 4}px`);
-      vadd('span', `${k}:nm`, k, 0); vset(`${k}:nm`, 'class', 'tree-name'); vtext(`${k}:nm`, r.name || String(r.id));
-      if (r.description) { vadd('span', `${k}:d`, k, 1); vset(`${k}:d`, 'class', 'tree-desc'); vtext(`${k}:d`, ' — ' + r.description); }
+      vadd('span', `${k}:dot`, k, 0); vset(`${k}:dot`, 'class', 'tree-dot' + (v.s ? ' on' : ''));
+      vadd('span', `${k}:nm`, k, 1); vset(`${k}:nm`, 'class', 'tree-name'); vtext(`${k}:nm`, r.name || String(r.id));
+      if (v.s || v.e) { vadd('span', `${k}:b`, k, 2); vset(`${k}:b`, 'class', 'tree-badge'); vtext(`${k}:b`, `  ${v.s} sensors · ${v.e} events`); }
       (kids.get(String(r.id)) || []).forEach((c) => emit(c, depth + 1));
     };
     roots.forEach((r) => emit(r, 0));
@@ -341,6 +353,24 @@ const T = (() => {
     G.submit(skillsSrc, ZSet.fromRows([rec({ name, title, description: meta.description || '' })]), prov('core'));
   }
 
+  // The agent inspects a source: compute quick stats over the materialized rows and
+  // surface them as a system note the agent perceives next turn (its analysis loop).
+  function inspectSource(src) {
+    const id = sourceIds.get(src);
+    if (id === undefined) { append('system', { text: `No source “${src}” to inspect.` }); return; }
+    const rows = G.stateOf(id).support().map((r) => r.asObject());
+    const cols = Object.keys((sources.get(src) || {}).schema || {});
+    const stats = cols.map((c) => {
+      const nums = rows.map((r) => Number(r[c])).filter((n) => Number.isFinite(n));
+      if (nums.length > rows.length * 0.5 && nums.length) {
+        const min = Math.min(...nums), max = Math.max(...nums), mean = nums.reduce((s, x) => s + x, 0) / nums.length;
+        return `${c} ${min.toFixed(1)}–${max.toFixed(1)} (avg ${mean.toFixed(1)})`;
+      }
+      return null;
+    }).filter(Boolean);
+    append('system', { text: `Inspected “${src}”: ${rows.length} rows, ${cols.length} columns.${stats.length ? ' Numeric ranges — ' + stats.join('; ') + '.' : ''}` });
+  }
+
   // ---- agent tool surface (§12.1) -------------------------------------------
   function agentTool(json) {
     let c; try { c = JSON.parse(json); } catch (_) { return; }
@@ -350,6 +380,7 @@ const T = (() => {
       case 'say': append('agent', { text: String(a.text || '') }); break;
       case 'ask': append('question', { text: String(a.question || a.text || ''), options: a.options || [] }); break;
       case 'record_profile': recordProfile(a.field, a.value); break;
+      case 'inspect': inspectSource(a.source); break;
       // read_source is effectful: handled at the Rust boundary, which calls mountSource.
       default: if (a.text) append('agent', { text: String(a.text) }); break;
     }
