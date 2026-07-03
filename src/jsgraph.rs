@@ -97,6 +97,22 @@ impl JsGraph {
         self.call("T.perceive()")
     }
 
+    /// Chart-a-sensor lens (§11.15): read a sensor's raw datapoints from disk,
+    /// downsample, and hand them to the JS chart component. Returns the point count.
+    pub fn twin_chart_series(&mut self, id: &str, label: &str) -> usize {
+        let path = format!("data/cognite/datapoints/{id}.csv");
+        let pts = crate::source::read_series_downsampled(&path, 700);
+        let n = pts.len();
+        let json = serde_json::to_string(&pts).unwrap_or_else(|_| "[]".into());
+        self.call(&format!("T.chartSeries({id:?}, {label:?}, {json})"));
+        n
+    }
+
+    /// Register a documents source (§9.15) from a list of `[name, mime, bytes]`.
+    pub fn twin_register_documents(&mut self, docs_json: &str) {
+        self.call(&format!("T.registerDocuments({docs_json})"));
+    }
+
     /// Install a skill (§4.1) into the twin — used by the core skills-loader (§11.13).
     pub fn twin_install_skill(&mut self, name: &str, title: &str, description: &str, files: &[String]) {
         let meta = serde_json::json!({ "title": title, "description": description, "files": files }).to_string();

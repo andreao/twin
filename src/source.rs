@@ -115,6 +115,28 @@ fn csv_grid(text: &str, delim: char) -> Vec<Vec<String>> {
     rows
 }
 
+/// Read a `timestamp,value` datapoints CSV and downsample to ~`target` points for a
+/// chart (the chart is a lens over the raw series; it doesn't need every point).
+pub fn read_series_downsampled(path: &str, target: usize) -> Vec<(i64, f64)> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+    let pts: Vec<(i64, f64)> = text
+        .lines()
+        .skip(1)
+        .filter_map(|l| {
+            let (t, v) = l.split_once(',')?;
+            Some((t.trim().parse().ok()?, v.trim().parse().ok()?))
+        })
+        .collect();
+    if target == 0 || pts.len() <= target {
+        return pts;
+    }
+    let step = (pts.len() / target).max(1);
+    pts.into_iter().step_by(step).collect()
+}
+
 /// Numbers become numbers, true/false become bools, empty becomes null; else string.
 fn infer_value(raw: &str) -> Value {
     let t = raw.trim();

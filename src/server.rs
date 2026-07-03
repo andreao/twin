@@ -86,7 +86,22 @@ fn graph_loop(rx: Receiver<Cmd>, wake: Sender<()>) {
     ] {
         if std::path::Path::new(path).exists() {
             let status = g.twin_read_source(name, path, "mounted");
-            println!("mounted {status}");
+            println!("{status}");
+        }
+    }
+    // register the pulled documents (P&IDs etc.) as a viewable source
+    if let Ok(rd) = std::fs::read_dir("data/cognite/files") {
+        let docs: Vec<serde_json::Value> = rd
+            .flatten()
+            .filter_map(|e| {
+                let name = e.file_name().into_string().ok()?;
+                let bytes = e.metadata().ok()?.len();
+                Some(serde_json::json!({ "name": name, "bytes": bytes }))
+            })
+            .collect();
+        if !docs.is_empty() {
+            g.twin_register_documents(&serde_json::to_string(&docs).unwrap_or_else(|_| "[]".into()));
+            println!("registered {} documents", docs.len());
         }
     }
 
@@ -104,10 +119,23 @@ fn graph_loop(rx: Receiver<Cmd>, wake: Sender<()>) {
                 }
             }
             Cmd::Event(json) => {
-                g.twin_event(&json);
+                let ev: Option<serde_json::Value> = serde_json::from_str(&json).ok();
+                let etype = ev.as_ref().and_then(|v| v["type"].as_str()).unwrap_or("");
+                match etype {
+                    // chart-a-sensor needs to read datapoints off disk (an effect)
+                    "chart_series" => {
+                        let v = ev.as_ref().unwrap();
+                        let id = v["id"].as_str().unwrap_or("");
+                        let label = v["label"].as_str().unwrap_or(id);
+                        g.twin_chart_series(id, label);
+                    }
+                    _ => g.twin_event(&json),
+                }
                 broadcast_new(&mut g, &mut cursor, &mut clients);
-                // the user steered — wake the agent to respond.
-                wake.send(()).ok();
+                // wake the agent only when the user actually steered (not on UI nav)
+                if etype == "user_message" {
+                    wake.send(()).ok();
+                }
             }
             Cmd::AgentTool(json) => {
                 dispatch_tool(&mut g, &json);
@@ -179,10 +207,50 @@ fn handle_conn(mut stream: TcpStream, tx: Sender<Cmd>) -> std::io::Result<()> {
         if ws::send_handshake(&mut stream, &request)? {
             serve_ws(stream, tx)?;
         }
+    } else if let Some(name) = file_request(&request) {
+        serve_file(stream, &name)?;
     } else {
         serve_html(stream)?;
     }
     Ok(())
+}
+
+/// A `GET /file/<name>` request → the basename to serve from the documents dir.
+fn file_request(request: &str) -> Option<String> {
+    let path = request.lines().next()?.split_whitespace().nth(1)?;
+    let rest = path.strip_prefix("/file/")?;
+    let name = rest.rsplit('/').next().unwrap_or(rest); // basename only — no traversal
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+fn serve_file(mut stream: TcpStream, name: &str) -> std::io::Result<()> {
+    match std::fs::read(format!("data/cognite/files/{name}")) {
+        Ok(bytes) => {
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                content_type(name),
+                bytes.len()
+            );
+            stream.write_all(header.as_bytes())?;
+            stream.write_all(&bytes)?;
+            stream.flush()
+        }
+        Err(_) => {
+            let resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\nConnection: close\r\n\r\nnot found";
+            stream.write_all(resp.as_bytes())?;
+            stream.flush()
+        }
+    }
+}
+
+fn content_type(name: &str) -> &'static str {
+    let n = name.to_ascii_lowercase();
+    if n.ends_with(".pdf") { "application/pdf" }
+    else if n.ends_with(".svg") { "image/svg+xml" }
+    else if n.ends_with(".png") { "image/png" }
+    else if n.ends_with(".jpg") || n.ends_with(".jpeg") { "image/jpeg" }
+    else if n.ends_with(".mp4") { "video/mp4" }
+    else { "application/octet-stream" }
 }
 
 fn serve_html(mut stream: TcpStream) -> std::io::Result<()> {

@@ -72,6 +72,22 @@
   #explorer-root td { padding: 6px 11px; border-bottom: 1px solid var(--line); white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
   #explorer-root tr:hover td { background: var(--panel); }
   .explorer-note { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
+  #explorer-root .chartable { cursor: pointer; }
+  #explorer-root .chartable:hover td { background: var(--accent-soft); }
+  /* chart lens */
+  .chart { width: 100%; height: auto; max-height: 72vh; display: block; }
+  .chart-line { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+  .chart-axis { stroke: var(--line); stroke-width: 1; }
+  .chart-lbl { fill: var(--muted); font-size: 11px; text-anchor: end; }
+  /* document viewer lens */
+  .doc-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-top: 12px; }
+  .doc-item { border: 1px solid var(--line); border-radius: 10px; padding: 14px; cursor: pointer; background: var(--panel); transition: border-color .12s, background .12s; }
+  .doc-item:hover { border-color: var(--accent); background: var(--accent-soft); }
+  .doc-name { font-size: 13px; font-weight: 550; word-break: break-all; }
+  .doc-type { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+  .doc-back { color: var(--accent); cursor: pointer; font-size: 13px; margin-bottom: 12px; display: inline-block; }
+  .doc-frame { width: 100%; height: 78vh; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+  .doc-img { max-width: 100%; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
 
   .working { max-width: 720px; margin: 0 auto; padding: 4px 28px 10px; height: 22px; color: var(--muted); font-size: 13px; display: none; align-items: center; gap: 8px; }
   .working.on { display: flex; }
@@ -159,19 +175,26 @@
   }
 
   const insertAt = (parent, el, i) => parent.insertBefore(el, parent.children[i] || null);
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const SVG_TAGS = new Set(["svg", "path", "line", "text", "g", "circle", "rect", "polyline", "polygon"]);
+
+  // wire the interactions the twin's rendered elements imply (all keyed by logical id)
+  function wire(el, key) {
+    if (/^sr:[^:]+$/.test(key)) el.addEventListener("click", () => openSource(key.slice(3)));
+    else if (/^exp:r:\d+$/.test(key)) el.addEventListener("click", () => { if (el.dataset.series) send({ type: "chart_series", id: el.dataset.series, label: el.dataset.label || el.dataset.series }); });
+    else if (key.startsWith("doc:") && !key.endsWith(":n") && !key.endsWith(":t")) el.addEventListener("click", () => send({ type: "open_document", name: key.slice(4) }));
+    else if (key === "exp:back") el.addEventListener("click", () => { showView("explorer", "documents"); send({ type: "open_source", name: "documents" }); });
+  }
 
   function applyMutation(m) {
     switch (m.op) {
       case "create": {
-        const el = document.createElement(m.tag);
+        const el = SVG_TAGS.has(m.tag) ? document.createElementNS(SVG_NS, m.tag) : document.createElement(m.tag);
         el.dataset.key = m.key;
         nodes.set(m.key, el);
         const parent = nodes.get(m.parent);
         if (parent) insertAt(parent, el, m.index);
-        // a data source row → click to explore its rows
-        if (/^sr:[^:]+$/.test(m.key)) {
-          el.addEventListener("click", () => openSource(m.key.slice(3)));
-        }
+        wire(el, m.key);
         break;
       }
       case "move": { const el = nodes.get(m.key), p = nodes.get(m.parent); if (el && p) insertAt(p, el, m.index); break; }

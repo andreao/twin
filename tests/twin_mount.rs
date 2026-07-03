@@ -57,6 +57,49 @@ fn opening_a_source_renders_a_browsable_table() {
 }
 
 #[test]
+fn charting_a_sensor_renders_an_svg_line() {
+    let dir = std::path::Path::new("data/cognite/datapoints");
+    if !dir.exists() {
+        eprintln!("skip: no datapoints pulled");
+        return;
+    }
+    // pick the largest series (most data) so we don't land on an empty sensor
+    let mut best: Option<(u64, String)> = None;
+    for e in std::fs::read_dir(dir).unwrap().flatten() {
+        let p = e.path();
+        if p.extension().map(|x| x == "csv").unwrap_or(false) {
+            if let (Ok(md), Some(stem)) = (e.metadata(), p.file_stem().and_then(|s| s.to_str())) {
+                if best.as_ref().map(|(b, _)| md.len() > *b).unwrap_or(true) {
+                    best = Some((md.len(), stem.to_string()));
+                }
+            }
+        }
+    }
+    let id = match best {
+        Some((_, i)) => i,
+        None => return,
+    };
+    let mut g = JsGraph::new_twin();
+    let n = g.twin_chart_series(&id, "sensor");
+    assert!(n > 0, "no points read for {id}");
+    let muts = g.twin_from(0);
+    assert!(muts.contains("\"tag\":\"svg\""), "no svg element rendered");
+    assert!(muts.contains("chart-line") && muts.contains("exp:path"), "no chart line path");
+}
+
+#[test]
+fn documents_source_renders_a_gallery_and_embed() {
+    let mut g = JsGraph::new_twin();
+    g.twin_register_documents(r#"[{"name":"PID-1.pdf","bytes":1024},{"name":"draw.svg","bytes":2048}]"#);
+    g.twin_event(r#"{"type":"open_source","name":"documents"}"#);
+    let gallery = g.twin_from(0);
+    assert!(gallery.contains("doc-gallery") && gallery.contains("doc:PID-1.pdf"), "no gallery");
+    g.twin_event(r#"{"type":"open_document","name":"PID-1.pdf"}"#);
+    let embed = g.twin_from(0);
+    assert!(embed.contains("/file/PID-1.pdf"), "no document embed src");
+}
+
+#[test]
 fn missing_file_reports_a_readable_error() {
     let mut g = JsGraph::new_twin();
     let status = g.twin_read_source("nope", "/no/such/file.csv", "mounted");

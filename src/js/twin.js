@@ -69,7 +69,7 @@ const T = (() => {
     G.submit(id, ZSet.fromRows(rows.map((r) => rec(r))), prov('upstream'));
     const schema = inferSchema(rows);
     const info = {
-      residence: meta.residence, locator: meta.locator,
+      kind: 'table', residence: meta.residence, locator: meta.locator,
       rowcount: meta.rowcount, materialized: meta.materialized || rows.length,
       schema, sample: rows.slice(0, 3),
     };
@@ -83,38 +83,100 @@ const T = (() => {
     append('system', { text: `Couldn't read “${name}”: ${msg}` });
   }
 
-  // Render a mounted source's rows as a browsable table in the data explorer (§11.7-ish,
-  // a plain snapshot for now).  Proves a lens that actually pulled something is
-  // explorable: the twin renders the materialized rows into 'explorer-root'.
-  let explorerKeys = [];
+  // A documents source (§9.15) — the pulled P&IDs/drawings, viewable in-app.
+  function registerDocuments(docs) {
+    const info = { kind: 'documents', residence: 'mounted', rowcount: docs.length, docs };
+    sources.set('documents', info);
+    sourcesPanel.set('documents', info);
+  }
+
+  // ---- viewer lenses (§11.15): every visualization is a lens rendering into the
+  // shared 'explorer-root'.  table / chart / document, dispatched by source kind. ----
   const MAX_EXPLORE_ROWS = 200;
+  let viewerKeys = [];
+  const clearViewer = () => { for (const k of viewerKeys) TWIN_MUT.push({ op: 'remove', key: k }); viewerKeys = []; };
+  const vadd = (tag, key, parent, index) => { TWIN_MUT.push({ op: 'create', key, tag, parent, index }); viewerKeys.push(key); };
+  const vset = (key, name, value) => TWIN_MUT.push({ op: 'setAttr', key, name, value: String(value) });
+  const vtext = (key, text) => TWIN_MUT.push({ op: 'setText', key, text });
+  const fmtNum = (n) => (Math.abs(n) >= 1000 || Number.isInteger(n)) ? n.toFixed(0) : Number(n.toPrecision(4)).toString();
+
   function openSource(name) {
     const s = sources.get(name);
+    if (!s) return;
+    if (s.kind === 'documents') return renderDocuments(s);
+    renderTable(name, s);
+  }
+
+  function renderTable(name, s) {
     const id = sourceIds.get(name);
-    if (!s || id === undefined) return;
+    if (id === undefined) return;
     const rows = G.stateOf(id).support().slice(0, MAX_EXPLORE_ROWS).map((r) => r.asObject());
     const cols = Object.keys(s.schema);
-    const push = (m) => TWIN_MUT.push(m);
-    for (const k of explorerKeys) push({ op: 'remove', key: k });
-    explorerKeys = [];
-    const add = (m) => { push(m); explorerKeys.push(m.key); };
-
-    add({ op: 'create', key: 'exp:note', tag: 'div', parent: 'explorer-root', index: 0 });
-    push({ op: 'setAttr', key: 'exp:note', name: 'class', value: 'explorer-note' });
-    push({ op: 'setText', key: 'exp:note', text: `${s.residence} · ${cols.length} columns · showing ${rows.length} of ${s.rowcount} rows` });
-    add({ op: 'create', key: 'exp:tbl', tag: 'table', parent: 'explorer-root', index: 1 });
-    add({ op: 'create', key: 'exp:thead', tag: 'thead', parent: 'exp:tbl', index: 0 });
-    add({ op: 'create', key: 'exp:htr', tag: 'tr', parent: 'exp:thead', index: 0 });
-    cols.forEach((c, i) => { add({ op: 'create', key: `exp:th:${i}`, tag: 'th', parent: 'exp:htr', index: i }); push({ op: 'setText', key: `exp:th:${i}`, text: c }); });
-    add({ op: 'create', key: 'exp:tb', tag: 'tbody', parent: 'exp:tbl', index: 1 });
+    const chartable = name === 'timeseries'; // a sensor row → chart its datapoints
+    clearViewer();
+    vadd('div', 'exp:note', 'explorer-root', 0); vset('exp:note', 'class', 'explorer-note');
+    vtext('exp:note', `${residenceLabel(s)} · ${cols.length} columns · showing ${rows.length} of ${s.rowcount} rows${chartable ? ' · click a sensor to chart it' : ''}`);
+    vadd('table', 'exp:tbl', 'explorer-root', 1);
+    vadd('thead', 'exp:thead', 'exp:tbl', 0);
+    vadd('tr', 'exp:htr', 'exp:thead', 0);
+    cols.forEach((c, i) => { vadd('th', `exp:th:${i}`, 'exp:htr', i); vtext(`exp:th:${i}`, c); });
+    vadd('tbody', 'exp:tb', 'exp:tbl', 1);
     rows.forEach((row, ri) => {
-      add({ op: 'create', key: `exp:r:${ri}`, tag: 'tr', parent: 'exp:tb', index: ri });
-      cols.forEach((c, ci) => {
-        const ck = `exp:c:${ri}:${ci}`;
-        add({ op: 'create', key: ck, tag: 'td', parent: `exp:r:${ri}`, index: ci });
-        push({ op: 'setText', key: ck, text: row[c] == null ? '' : String(row[c]) });
-      });
+      const rk = `exp:r:${ri}`;
+      vadd('tr', rk, 'exp:tb', ri);
+      if (chartable) { vset(rk, 'class', 'chartable'); vset(rk, 'data-series', row.id); vset(rk, 'data-label', row.externalId || row.name || row.id); }
+      cols.forEach((c, ci) => { const ck = `exp:c:${ri}:${ci}`; vadd('td', ck, rk, ci); vtext(ck, row[c] == null ? '' : String(row[c])); });
     });
+  }
+
+  // chart lens: raw datapoints (from Rust, downsampled) → an SVG line chart.
+  function chartSeries(id, label, points) {
+    clearViewer();
+    if (!points || !points.length) { vadd('div', 'exp:note', 'explorer-root', 0); vset('exp:note', 'class', 'explorer-note'); vtext('exp:note', `No datapoints on disk for ${label}.`); return; }
+    const W = 1000, H = 360, pad = 46;
+    const ts = points.map((p) => p[0]), vs = points.map((p) => p[1]);
+    const tmin = Math.min(...ts), tmax = Math.max(...ts), vmin = Math.min(...vs), vmax = Math.max(...vs);
+    const sx = (t) => pad + (tmax > tmin ? (t - tmin) / (tmax - tmin) : 0) * (W - 2 * pad);
+    const sy = (v) => (H - pad) - (vmax > vmin ? (v - vmin) / (vmax - vmin) : 0) * (H - 2 * pad);
+    let d = '';
+    points.forEach((p, i) => { d += (i ? 'L' : 'M') + sx(p[0]).toFixed(1) + ' ' + sy(p[1]).toFixed(1) + ' '; });
+    vadd('div', 'exp:note', 'explorer-root', 0); vset('exp:note', 'class', 'explorer-note');
+    vtext('exp:note', `${label} · ${points.length} points · min ${fmtNum(vmin)} · max ${fmtNum(vmax)}`);
+    vadd('svg', 'exp:svg', 'explorer-root', 1); vset('exp:svg', 'viewBox', `0 0 ${W} ${H}`); vset('exp:svg', 'class', 'chart');
+    vadd('line', 'exp:ax', 'exp:svg', 0); vset('exp:ax', 'x1', pad); vset('exp:ax', 'y1', H - pad); vset('exp:ax', 'x2', W - pad); vset('exp:ax', 'y2', H - pad); vset('exp:ax', 'class', 'chart-axis');
+    vadd('line', 'exp:ay', 'exp:svg', 1); vset('exp:ay', 'x1', pad); vset('exp:ay', 'y1', pad); vset('exp:ay', 'x2', pad); vset('exp:ay', 'y2', H - pad); vset('exp:ay', 'class', 'chart-axis');
+    vadd('path', 'exp:path', 'exp:svg', 2); vset('exp:path', 'd', d.trim()); vset('exp:path', 'class', 'chart-line');
+    vadd('text', 'exp:ymax', 'exp:svg', 3); vset('exp:ymax', 'x', pad - 8); vset('exp:ymax', 'y', pad + 4); vset('exp:ymax', 'class', 'chart-lbl'); vtext('exp:ymax', fmtNum(vmax));
+    vadd('text', 'exp:ymin', 'exp:svg', 4); vset('exp:ymin', 'x', pad - 8); vset('exp:ymin', 'y', H - pad); vset('exp:ymin', 'class', 'chart-lbl'); vtext('exp:ymin', fmtNum(vmin));
+  }
+
+  // document viewer: a gallery, then an embed of the chosen file (served at /file/<name>).
+  function renderDocuments(s) {
+    clearViewer();
+    vadd('div', 'exp:note', 'explorer-root', 0); vset('exp:note', 'class', 'explorer-note');
+    vtext('exp:note', `${s.docs.length} documents (P&IDs, drawings, training) — click to view`);
+    vadd('div', 'exp:gal', 'explorer-root', 1); vset('exp:gal', 'class', 'doc-gallery');
+    s.docs.forEach((doc, i) => {
+      const k = `doc:${doc.name}`;
+      vadd('div', k, 'exp:gal', i); vset(k, 'class', 'doc-item');
+      vadd('div', `${k}:n`, k, 0); vset(`${k}:n`, 'class', 'doc-name'); vtext(`${k}:n`, doc.name);
+      vadd('div', `${k}:t`, k, 1); vset(`${k}:t`, 'class', 'doc-type'); vtext(`${k}:t`, `${(doc.bytes / 1024).toFixed(0)} KB`);
+    });
+  }
+  function openDocument(name) {
+    clearViewer();
+    vadd('div', 'exp:back', 'explorer-root', 0); vset('exp:back', 'class', 'doc-back'); vtext('exp:back', '← back to documents');
+    const ext = String(name).split('.').pop().toLowerCase();
+    const src = '/file/' + encodeURIComponent(name);
+    if (ext === 'pdf') { vadd('iframe', 'exp:doc', 'explorer-root', 1); vset('exp:doc', 'src', src); vset('exp:doc', 'class', 'doc-frame'); }
+    else if (ext === 'mp4') { vadd('video', 'exp:doc', 'explorer-root', 1); vset('exp:doc', 'src', src); vset('exp:doc', 'controls', 'true'); vset('exp:doc', 'class', 'doc-frame'); }
+    else { vadd('img', 'exp:doc', 'explorer-root', 1); vset('exp:doc', 'src', src); vset('exp:doc', 'class', 'doc-img'); }
+  }
+
+  function residenceLabel(s) {
+    if (s.residence === 'mounted') return 'federated · live (read-through, not copied)';
+    if (s.residence === 'mounted-partial') return `federated · ${s.materialized} of ${s.rowcount} synced local`;
+    return s.residence;
   }
 
   // Install a skill (§4.1) — called by the core skills-loader from the static dir.
@@ -153,6 +215,8 @@ const T = (() => {
       append('user', { text: opt != null ? String(opt) : `option ${idx + 1}` });
     } else if (e.type === 'open_source' && e.name) {
       openSource(String(e.name));
+    } else if (e.type === 'open_document' && e.name) {
+      openDocument(String(e.name));
     }
   }
 
@@ -168,6 +232,7 @@ const T = (() => {
 
   return {
     agentTool, event, perceive, mountSource, sourceError, installSkill,
+    registerDocuments, chartSeries,
     // the shared mutation log (§11.3): replaying [0..total) rebuilds the DOM exactly.
     total() { return TWIN_MUT.length; },
     from(n) { return JSON.stringify(TWIN_MUT.slice(n)); },

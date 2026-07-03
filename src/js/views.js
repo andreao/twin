@@ -91,7 +91,11 @@ class SourcesPanel {
   _emit(m) { TWIN_MUT.push(m); }
 
   set(name, meta) {
-    const detail = `${meta.residence} · ${meta.rowcount} rows`;
+    const resid = meta.kind === 'documents' ? `${meta.rowcount} documents`
+      : meta.residence === 'mounted' ? `federated · live · ${meta.rowcount} rows`
+      : meta.residence === 'mounted-partial' ? `federated · ${meta.materialized} of ${meta.rowcount} local`
+      : `${meta.residence} · ${meta.rowcount} rows`;
+    const detail = resid;
     if (this.names.has(name)) {
       this.names.set(name, meta);
       this._emit({ op: 'setText', key: `sr:${name}:d`, text: detail });
