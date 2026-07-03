@@ -129,10 +129,16 @@ const T = (() => {
     });
   }
 
-  // chart lens: raw datapoints (from Rust, downsampled) → an SVG line chart.
-  function chartSeries(id, label, points) {
+  function chartMessage(label, msg) {
     clearViewer();
-    if (!points || !points.length) { vadd('div', 'exp:note', 'explorer-root', 0); vset('exp:note', 'class', 'explorer-note'); vtext('exp:note', `No datapoints on disk for ${label}.`); return; }
+    vadd('div', 'exp:note', 'explorer-root', 0); vset('exp:note', 'class', 'explorer-note');
+    vtext('exp:note', `${label} — ${msg}.`);
+  }
+
+  // chart lens: raw datapoints (from Rust, downsampled) → an SVG line chart.
+  function chartSeries(id, label, points, provenance) {
+    clearViewer();
+    if (!points || !points.length) { return chartMessage(label, 'no datapoints'); }
     const W = 1000, H = 360, pad = 46;
     const ts = points.map((p) => p[0]), vs = points.map((p) => p[1]);
     const tmin = Math.min(...ts), tmax = Math.max(...ts), vmin = Math.min(...vs), vmax = Math.max(...vs);
@@ -141,7 +147,7 @@ const T = (() => {
     let d = '';
     points.forEach((p, i) => { d += (i ? 'L' : 'M') + sx(p[0]).toFixed(1) + ' ' + sy(p[1]).toFixed(1) + ' '; });
     vadd('div', 'exp:note', 'explorer-root', 0); vset('exp:note', 'class', 'explorer-note');
-    vtext('exp:note', `${label} · ${points.length} points · min ${fmtNum(vmin)} · max ${fmtNum(vmax)}`);
+    vtext('exp:note', `${label} · ${points.length} points · min ${fmtNum(vmin)} · max ${fmtNum(vmax)}${provenance ? ' · ' + provenance : ''}`);
     vadd('svg', 'exp:svg', 'explorer-root', 1); vset('exp:svg', 'viewBox', `0 0 ${W} ${H}`); vset('exp:svg', 'class', 'chart');
     vadd('line', 'exp:ax', 'exp:svg', 0); vset('exp:ax', 'x1', pad); vset('exp:ax', 'y1', H - pad); vset('exp:ax', 'x2', W - pad); vset('exp:ax', 'y2', H - pad); vset('exp:ax', 'class', 'chart-axis');
     vadd('line', 'exp:ay', 'exp:svg', 1); vset('exp:ay', 'x1', pad); vset('exp:ay', 'y1', pad); vset('exp:ay', 'x2', pad); vset('exp:ay', 'y2', H - pad); vset('exp:ay', 'class', 'chart-axis');
@@ -232,7 +238,7 @@ const T = (() => {
 
   return {
     agentTool, event, perceive, mountSource, sourceError, installSkill,
-    registerDocuments, chartSeries,
+    registerDocuments, chartSeries, chartMessage,
     // the shared mutation log (§11.3): replaying [0..total) rebuilds the DOM exactly.
     total() { return TWIN_MUT.length; },
     from(n) { return JSON.stringify(TWIN_MUT.slice(n)); },

@@ -130,11 +130,27 @@ pub fn read_series_downsampled(path: &str, target: usize) -> Vec<(i64, f64)> {
             Some((t.trim().parse().ok()?, v.trim().parse().ok()?))
         })
         .collect();
+    downsample(pts, target)
+}
+
+/// Keep ~`target` evenly-spaced points (a chart doesn't need every one).
+pub fn downsample(pts: Vec<(i64, f64)>, target: usize) -> Vec<(i64, f64)> {
     if target == 0 || pts.len() <= target {
         return pts;
     }
     let step = (pts.len() / target).max(1);
     pts.into_iter().step_by(step).collect()
+}
+
+/// Materialize a series to disk (write-through cache after an on-demand fetch, §7).
+pub fn write_series(path: &str, pts: &[(i64, f64)]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::File::create(path)?;
+    writeln!(f, "timestamp,value")?;
+    for (t, v) in pts {
+        writeln!(f, "{t},{v}")?;
+    }
+    Ok(())
 }
 
 /// Numbers become numbers, true/false become bools, empty becomes null; else string.

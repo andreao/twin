@@ -11,10 +11,10 @@
     margin: 0; background: var(--bg); color: var(--ink);
     font: 15px/1.55 -apple-system, "SF Pro Text", system-ui, sans-serif;
   }
-  .shell { display: grid; grid-template-columns: 264px 1fr; height: 100vh; }
+  .shell { display: grid; grid-template-columns: 264px 1fr; height: 100vh; overflow: hidden; }
 
-  /* ---- rail ---- */
-  .rail { border-right: 1px solid var(--line); background: var(--panel); padding: 20px 16px; display: flex; flex-direction: column; overflow: auto; }
+  /* ---- rail (scrolls independently of the main area) ---- */
+  .rail { border-right: 1px solid var(--line); background: var(--panel); padding: 20px 16px; display: flex; flex-direction: column; overflow-y: auto; min-height: 0; }
   .brand { font-weight: 650; font-size: 16px; letter-spacing: -0.01em; margin-bottom: 20px; display: flex; align-items: center; gap: 8px; }
   .brand .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
   .nav { display: flex; flex-direction: column; gap: 2px; }
@@ -37,18 +37,27 @@
   .src-d { font-size: 11.5px; color: var(--muted); }
 
   /* ---- main ---- */
-  .main { display: flex; flex-direction: column; min-width: 0; }
+  .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
   .topbar { padding: 14px 28px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; }
   .topbar h1 { font-size: 14px; font-weight: 600; margin: 0; }
   .status { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 7px; }
   .status .dot { width: 7px; height: 7px; border-radius: 50%; background: #ccc; }
   .status.live .dot { background: #4a9d5b; }
 
-  .section-view { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px; }
+  .section-view { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 40px; }
   .empty { max-width: 440px; text-align: center; color: var(--muted); font-size: 14px; line-height: 1.6; }
   .empty b { color: var(--ink); display: block; margin-bottom: 6px; font-size: 15px; }
 
-  .feedwrap { flex: 1; overflow-y: auto; }
+  /* ---- Data page (its own view) ---- */
+  .datapage { flex: 1; min-height: 0; overflow: auto; padding: 22px 28px; }
+  .data-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+  #sources-root:empty::after { content: "no data yet — point the agent at a file or run a skill."; color: var(--muted); font-size: 13px; font-style: italic; }
+  .data-grid .src-row { border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; cursor: pointer; background: var(--panel); transition: border-color .12s, background .12s; }
+  .data-grid .src-row:hover { border-color: var(--accent); background: var(--accent-soft); }
+  .data-grid .src-n { font-size: 15px; font-weight: 600; text-transform: capitalize; }
+  .data-grid .src-d { font-size: 12.5px; margin-top: 4px; }
+
+  .feedwrap { flex: 1; min-height: 0; overflow-y: auto; }
   .feed { max-width: 720px; margin: 0 auto; padding: 28px 28px 8px; display: flex; flex-direction: column; gap: 4px; }
   .feed-item { padding: 8px 0; animation: rise .28s ease; }
   @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
@@ -66,7 +75,7 @@
   .q-option:hover { background: var(--accent-soft); border-color: var(--accent); }
 
   /* ---- data explorer ---- */
-  .explorer { flex: 1; overflow: auto; padding: 20px 28px; }
+  .explorer { flex: 1; min-height: 0; overflow: auto; padding: 20px 28px; }
   #explorer-root table { border-collapse: collapse; width: 100%; font-size: 13px; }
   #explorer-root th { text-align: left; position: sticky; top: 0; background: var(--bg); color: var(--muted); font-weight: 500; padding: 8px 11px; border-bottom: 1px solid var(--line); white-space: nowrap; }
   #explorer-root td { padding: 6px 11px; border-bottom: 1px solid var(--line); white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
@@ -107,14 +116,13 @@
     <div class="brand"><span class="dot"></span> twin</div>
     <div class="nav">
       <div class="navitem active" data-view="workspace">Workspace</div>
+      <div class="navitem" data-view="data">Data</div>
       <div class="navitem" data-view="artifacts">Artifacts</div>
       <div class="navitem" data-view="tasks">Tasks</div>
       <div class="navitem" data-view="scheduled">Scheduled</div>
     </div>
     <div class="navlabel">Skills</div>
     <div class="sources" id="skills-root"></div>
-    <div class="navlabel">Data in the twin</div>
-    <div class="sources" id="sources-root"></div>
     <div class="navlabel">About you</div>
     <div class="profile" id="profile-root"></div>
   </aside>
@@ -125,6 +133,7 @@
       <div class="status" id="status"><span class="dot"></span><span id="statustext">connecting…</span></div>
     </div>
     <div class="feedwrap" id="feedwrap"><div class="feed" id="feed-root"></div></div>
+    <div class="datapage" id="data-view" hidden><div id="sources-root" class="data-grid"></div></div>
     <div class="section-view" id="section-view" hidden><div class="empty" id="section-empty"></div></div>
     <div class="explorer" id="explorer-view" hidden><div id="explorer-root"></div></div>
     <div class="working" id="working"><span class="spin"></span> the agent is thinking…</div>
@@ -156,6 +165,7 @@
   const sectionView = document.getElementById("section-view");
   const sectionEmpty = document.getElementById("section-empty");
   const explorerView = document.getElementById("explorer-view");
+  const dataView = document.getElementById("data-view");
   const viewTitle = document.getElementById("viewtitle");
   const composer = document.getElementById("composer");
 
@@ -239,12 +249,13 @@
   const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
   function showView(view, title) {
     document.querySelectorAll(".navitem").forEach((n) => n.classList.toggle("active", n.dataset.view === view));
-    viewTitle.textContent = title || cap(view);
+    viewTitle.textContent = title || (view === "data" ? "Data in the twin" : cap(view));
     const isWorkspace = view === "workspace";
     const isSection = SECTIONS[view] != null;
     feedwrap.hidden = !isWorkspace;
     composer.hidden = !isWorkspace;
     workingEl.style.display = isWorkspace ? "" : "none";
+    dataView.hidden = view !== "data";
     sectionView.hidden = !isSection;
     explorerView.hidden = view !== "explorer";
     if (isSection) { const [t, b] = SECTIONS[view]; sectionEmpty.innerHTML = `<b>${t}</b>${b}`; }

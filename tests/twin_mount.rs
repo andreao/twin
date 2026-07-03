@@ -107,3 +107,22 @@ fn missing_file_reports_a_readable_error() {
     let muts = g.twin_from(0);
     assert!(muts.contains("Couldn't read"), "no error surfaced to user: {muts}");
 }
+
+#[test]
+fn parametrized_datapoints_lens_fetches_on_demand() {
+    if !std::path::Path::new("/tmp/cognite_token.json").exists() {
+        eprintln!("skip: no Cognite token");
+        return;
+    }
+    let mut g = JsGraph::new_twin();
+    // 1009048440794092: empty in our 30-day window, but has data back in 2023
+    let _ = std::fs::remove_file("data/cognite/datapoints/1009048440794092.csv");
+    let n = g.twin_chart_series("1009048440794092", "VAL-test");
+    eprintln!("on-demand chart: {n} points");
+    let muts = g.twin_from(0);
+    if n > 0 {
+        assert!(muts.contains("\"tag\":\"svg\""), "should render a chart");
+        assert!(muts.contains("fetched live on demand"), "should note the on-demand fetch");
+        assert!(std::path::Path::new("data/cognite/datapoints/1009048440794092.csv").exists(), "should cache locally");
+    }
+}

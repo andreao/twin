@@ -97,14 +97,35 @@ impl JsGraph {
         self.call("T.perceive()")
     }
 
-    /// Chart-a-sensor lens (§11.15): read a sensor's raw datapoints from disk,
-    /// downsample, and hand them to the JS chart component. Returns the point count.
+    /// The parametrized chart lens (§9.11, §11.15): chart a sensor's raw datapoints.
+    /// If not materialized locally, fetch on demand from Cognite, anchored to where the
+    /// data actually is, and write-through-cache it (§7). Returns the point count.
     pub fn twin_chart_series(&mut self, id: &str, label: &str) -> usize {
         let path = format!("data/cognite/datapoints/{id}.csv");
-        let pts = crate::source::read_series_downsampled(&path, 700);
+        let mut pts = crate::source::read_series_downsampled(&path, 700);
+        let mut provenance = "materialized locally";
+
+        if pts.is_empty() {
+            match crate::cognite::fetch_series(id, 180) {
+                Ok(raw) if !raw.is_empty() => {
+                    let _ = crate::source::write_series(&path, &raw); // sync local
+                    provenance = "fetched live on demand (180d)";
+                    pts = crate::source::downsample(raw, 700);
+                }
+                Ok(_) => {
+                    self.call(&format!("T.chartMessage({label:?}, {:?})", "no datapoints exist for this sensor"));
+                    return 0;
+                }
+                Err(e) => {
+                    self.call(&format!("T.chartMessage({label:?}, {:?})", format!("couldn't fetch on demand — {e}")));
+                    return 0;
+                }
+            }
+        }
+
         let n = pts.len();
         let json = serde_json::to_string(&pts).unwrap_or_else(|_| "[]".into());
-        self.call(&format!("T.chartSeries({id:?}, {label:?}, {json})"));
+        self.call(&format!("T.chartSeries({id:?}, {label:?}, {json}, {provenance:?})"));
         n
     }
 

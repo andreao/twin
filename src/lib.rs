@@ -12,6 +12,7 @@
 
 pub mod adapter;
 pub mod agent;
+pub mod cognite;
 pub mod definitions;
 pub mod engine;
 pub mod hashing;
