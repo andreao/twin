@@ -200,3 +200,23 @@ fn hierarchy_rolls_up_links_and_agent_can_inspect() {
     let feed = g.twin_from(0);
     assert!(feed.contains("Inspected") && feed.contains("timeseries"), "inspect did not run");
 }
+
+#[test]
+fn watch_derives_blind_spots_and_hotspots() {
+    let mut g = JsGraph::new_twin();
+    let a = std::env::temp_dir().join("w_assets.csv");
+    std::fs::write(&a, "id,parentId,name\n1,,Compressor\n2,,Pump\n").unwrap();
+    let t = std::env::temp_dir().join("w_ts.csv");
+    std::fs::write(&t, "id,name,assetId\n9,temp,1\n").unwrap(); // asset 1 monitored, asset 2 not
+    let e = std::env::temp_dir().join("w_ev.csv");
+    // asset 2 has events but no sensors → a blind spot
+    std::fs::write(&e, "id,type,startTime,assetIds\n1,WO,1,2\n2,WO,2,2\n3,WO,3,1\n").unwrap();
+    g.twin_read_source("assets", a.to_str().unwrap(), "mounted");
+    g.twin_read_source("timeseries", t.to_str().unwrap(), "mounted");
+    g.twin_read_source("events", e.to_str().unwrap(), "mounted");
+    g.twin_event(r#"{"type":"watch"}"#);
+    let w = g.twin_from(0);
+    assert!(w.contains("Blind spots"), "no blind-spots section");
+    assert!(w.contains("iss:2:1:0") && w.contains("Pump"), "Pump (events, no sensors) not flagged as blind spot");
+    assert!(w.contains("Maintenance hotspots"), "no hotspots section");
+}

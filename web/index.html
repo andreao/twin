@@ -119,6 +119,10 @@
   .sens-row:hover { border-color: var(--accent); background: var(--accent-soft); }
   .sens-n { font-size: 12.5px; font-weight: 500; }
   .sens-u { color: var(--muted); font-size: 12px; }
+  .issue-card { border: 1px solid var(--line); border-left: 3px solid var(--line); border-radius: 9px; padding: 10px 12px; cursor: pointer; background: var(--panel); transition: background .12s; }
+  .issue-card:hover { background: var(--accent-soft); }
+  .issue-card.sev-amber { border-left-color: #d9902a; }
+  .issue-card.sev-blue { border-left-color: var(--accent); }
   /* document viewer lens */
   .doc-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-top: 12px; }
   .doc-item { border: 1px solid var(--line); border-radius: 10px; padding: 14px; cursor: pointer; background: var(--panel); transition: border-color .12s, background .12s; }
@@ -148,6 +152,7 @@
     <div class="nav">
       <div class="navitem active" data-view="workspace">Workspace</div>
       <div class="navitem" data-view="data">Data</div>
+      <div class="navitem" data-view="watch">Watch</div>
       <div class="navitem" data-view="skills">Skills</div>
       <div class="navitem" data-view="artifacts">Artifacts</div>
       <div class="navitem" data-view="tasks">Tasks</div>
@@ -231,6 +236,7 @@
     else if (/^tn:[^:]+$/.test(key)) el.addEventListener("click", () => { showView("explorer", "Asset"); send({ type: "open_asset", id: key.slice(3) }); });
     else if (/^sens:[^:]+$/.test(key)) el.addEventListener("click", () => { if (el.dataset.series) { showView("explorer", el.dataset.label || "Sensor"); send({ type: "chart_series", id: el.dataset.series, label: el.dataset.label || el.dataset.series }); } });
     else if (key === "ad:back") el.addEventListener("click", () => { showView("explorer", "assets"); send({ type: "open_source", name: "assets", mode: "tree" }); });
+    else if (/^iss:[^:]+:\d+:\d+$/.test(key)) el.addEventListener("click", () => { showView("explorer", "Asset"); send({ type: "open_asset", id: key.split(":")[1] }); });
   }
 
   function applyMutation(m) {
@@ -299,7 +305,11 @@
     if (isSection) { const [t, b] = SECTIONS[view]; sectionEmpty.innerHTML = `<b>${t}</b>${b}`; }
   }
   document.querySelectorAll(".navitem").forEach((item) =>
-    item.addEventListener("click", () => showView(item.dataset.view)));
+    item.addEventListener("click", () => {
+      const v = item.dataset.view;
+      if (v === "watch") { showView("explorer", "Watch"); document.querySelectorAll(".navitem").forEach((n) => n.classList.toggle("active", n === item)); send({ type: "watch" }); }
+      else showView(v);
+    }));
 
   // search — the parametrized lens, driven from the topbar (debounced)
   const searchBox = document.getElementById("search");

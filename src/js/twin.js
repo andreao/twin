@@ -316,6 +316,40 @@ const T = (() => {
     if (events.length) { const lk = sec('Events', events.length); events.forEach((e, i) => card(`se:ev${i}`, lk, i, `${fmtDate(e.startTime)} · ${e.type || ''}`.trim(), e.description || '')); }
   }
 
+  // Watch (§12.4) — the twin watching itself: derived issues from the asset ↔ sensor
+  // ↔ event links, surfaced as a queue you browse and click through to the asset.
+  function watch() {
+    clearViewer();
+    const assets = rowsOf('assets'); const byId = new Map(assets.map((a) => [String(a.id), a]));
+    const eByA = new Map(); rowsOf('events').forEach((e) => String(e.assetIds || '').split(';').forEach((a) => { if (a) eByA.set(a, (eByA.get(a) || 0) + 1); }));
+    const sByA = new Map(); rowsOf('timeseries').forEach((t) => { const a = String(t.assetId); sByA.set(a, (sByA.get(a) || 0) + 1); });
+    vadd('div', 'exp:note', 'explorer-root', 0); vset('exp:note', 'class', 'explorer-note');
+    vtext('exp:note', 'Derived issues — the twin watching itself over the asset ↔ sensor ↔ event links.');
+    let idx = 1;
+    const section = (title, hint) => {
+      vadd('div', `w:h${idx}`, 'explorer-root', idx); vset(`w:h${idx}`, 'class', 'ad-section'); vtext(`w:h${idx}`, title); idx++;
+      if (hint) { vadd('div', `w:hh${idx}`, 'explorer-root', idx); vset(`w:hh${idx}`, 'class', 'ad-empty'); vtext(`w:hh${idx}`, hint); idx++; }
+      const lk = `w:l${idx}`; vadd('div', lk, 'explorer-root', idx); vset(lk, 'class', 'sens-list'); idx++; return lk;
+    };
+    const card = (lk, sec, i, id, name, detail, sev) => {
+      const k = `iss:${id}:${sec}:${i}`;
+      vadd('div', k, lk, i); vset(k, 'class', `issue-card ${sev}`);
+      vadd('span', `${k}:n`, k, 0); vset(`${k}:n`, 'class', 'sens-n'); vtext(`${k}:n`, name);
+      vadd('span', `${k}:d`, k, 1); vset(`${k}:d`, 'class', 'sens-u'); vtext(`${k}:d`, ' ' + detail);
+    };
+
+    // 1) blind spots — maintenance activity but no monitoring
+    const blind = [...eByA.entries()].filter(([a, c]) => c >= 2 && !sByA.get(a) && byId.has(a)).sort((x, y) => y[1] - x[1]).slice(0, 15);
+    const lk1 = section(`Blind spots — ${blind.length}`, 'equipment with maintenance events but no sensors monitoring it');
+    if (!blind.length) { vadd('div', 'w:e1', lk1, 0); vset('w:e1', 'class', 'ad-empty'); vtext('w:e1', 'none found'); }
+    blind.forEach(([a, c], i) => card(lk1, 1, i, a, byId.get(a).name || a, `${c} events · 0 sensors`, 'sev-amber'));
+
+    // 2) maintenance hotspots — where the work orders concentrate
+    const hot = [...eByA.entries()].filter(([a]) => byId.has(a)).sort((x, y) => y[1] - x[1]).slice(0, 10);
+    const lk2 = section(`Maintenance hotspots — top ${hot.length}`, 'assets with the most work orders');
+    hot.forEach(([a, c], i) => card(lk2, 2, i, a, byId.get(a).name || a, `${c} events · ${sByA.get(a) || 0} sensors`, 'sev-blue'));
+  }
+
   // document viewer: a gallery, then an embed of the chosen file (served at /file/<name>).
   function renderDocuments(s) {
     clearViewer();
@@ -406,6 +440,8 @@ const T = (() => {
       openAsset(String(e.id));
     } else if (e.type === 'search') {
       search(String(e.query || ''));
+    } else if (e.type === 'watch') {
+      watch();
     }
   }
 
