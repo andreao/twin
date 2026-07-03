@@ -120,20 +120,20 @@ class SkillsPanel {
   }
   _emit(m) { TWIN_MUT.push(m); }
 
-  set(name, description) {
+  set(name, title, description) {
     if (this.names.has(name)) {
-      this.names.set(name, description);
+      this._emit({ op: 'setText', key: `sk:${name}:n`, text: title });
       this._emit({ op: 'setText', key: `sk:${name}:d`, text: description });
       return;
     }
     const i = this.names.size;
-    this.names.set(name, description);
+    this.names.set(name, title);
     const rk = `sk:${name}`;
     this._emit({ op: 'create', key: rk, tag: 'div', parent: this.root, index: i });
     this._emit({ op: 'setAttr', key: rk, name: 'class', value: 'src-row' });
     this._emit({ op: 'create', key: `${rk}:n`, tag: 'div', parent: rk, index: 0 });
     this._emit({ op: 'setAttr', key: `${rk}:n`, name: 'class', value: 'src-n' });
-    this._emit({ op: 'setText', key: `${rk}:n`, text: name });
+    this._emit({ op: 'setText', key: `${rk}:n`, text: title });
     this._emit({ op: 'create', key: `${rk}:d`, tag: 'div', parent: rk, index: 1 });
     this._emit({ op: 'setAttr', key: `${rk}:d`, name: 'class', value: 'src-d' });
     this._emit({ op: 'setText', key: `${rk}:d`, text: description });

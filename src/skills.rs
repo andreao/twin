@@ -11,6 +11,7 @@ use std::path::Path;
 
 pub struct Skill {
     pub name: String,
+    pub title: String,
     pub description: String,
     pub dir: String,
     pub files: Vec<String>,
@@ -33,7 +34,7 @@ pub fn discover(root: &str) -> Vec<Skill> {
             continue;
         }
         let text = fs::read_to_string(&manifest).unwrap_or_default();
-        let (name, description) = parse_manifest(&text, &dir);
+        let (name, title, description) = parse_manifest(&text, &dir);
         let mut files: Vec<String> = fs::read_dir(&dir)
             .map(|rd| {
                 rd.flatten()
@@ -44,6 +45,7 @@ pub fn discover(root: &str) -> Vec<Skill> {
         files.sort();
         out.push(Skill {
             name,
+            title,
             description,
             dir: dir.to_string_lossy().into_owned(),
             files,
@@ -53,14 +55,15 @@ pub fn discover(root: &str) -> Vec<Skill> {
     out
 }
 
-/// name + description from YAML frontmatter if present, else derive from the dir name
-/// and the first meaningful line.
-fn parse_manifest(text: &str, dir: &Path) -> (String, String) {
+/// name / title / description from YAML frontmatter if present, else derive from the
+/// dir name and the first meaningful line.
+fn parse_manifest(text: &str, dir: &Path) -> (String, String, String) {
     let mut name = dir
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("skill")
         .to_string();
+    let mut title = String::new();
     let mut description = String::new();
 
     if let Some(rest) = text.strip_prefix("---") {
@@ -68,11 +71,27 @@ fn parse_manifest(text: &str, dir: &Path) -> (String, String) {
             for line in rest[..end].lines() {
                 if let Some(v) = line.strip_prefix("name:") {
                     name = v.trim().to_string();
+                } else if let Some(v) = line.strip_prefix("title:") {
+                    title = v.trim().to_string();
                 } else if let Some(v) = line.strip_prefix("description:") {
                     description = v.trim().to_string();
                 }
             }
         }
+    }
+    if title.is_empty() {
+        // presentational fallback: "obtain-oid" -> "Obtain oid"
+        title = name
+            .replace(['-', '_'], " ")
+            .split_whitespace()
+            .map(|w| {
+                let mut c = w.chars();
+                c.next()
+                    .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
     }
     if description.is_empty() {
         description = text
@@ -84,7 +103,7 @@ fn parse_manifest(text: &str, dir: &Path) -> (String, String) {
             .take(200)
             .collect();
     }
-    (name, description)
+    (name, title, description)
 }
 
 #[cfg(test)]

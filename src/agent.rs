@@ -25,10 +25,6 @@ const DEFAULT_MODEL: &str = "gemma4:12b";
 /// can never loop forever.
 const MAX_STEPS: usize = 3;
 
-/// The instant, scripted open (no model call) so launching the twin is immediate and
-/// the first *model* turn always has real user input to act on.
-const GREETING: &str = "Hi — I'm the AI that helps you build and run your twin: a living, data-driven model of your operation (a plant, a fleet, a field — whatever you work on). It starts empty, and we grow it together. To begin, tell me a bit about what you do and what you're trying to understand or improve. If you already have data — a CSV or JSON file — point me at its path and I'll pull it into the twin.";
-
 const SYSTEM_PROMPT: &str = r#"You are a warm, sharp AI that helps ONE user build and operate their "twin" — a living digital twin of their industrial system or operation (a plant, a fleet, a field, a process). You are NOT the twin, and you are not a twin of the user; you are the intelligence that grows and tends the twin together with them. You lead the collaboration; the user steers and supplies domain knowledge you cannot have.
 
 You start blind: you do not yet know who the user is, their role, their goals, or what data feeds the twin. Your first job is to understand them and their operation and grow the twin together, the way a great colleague would on day one — not by interrogating them, but by being genuinely curious and useful.
@@ -44,6 +40,8 @@ You perceive the twin as JSON each turn: "profile" (what you know about the user
 
 Rules:
 - Output ONE valid JSON object only. Nothing before or after it.
+- On the very first turn (empty feed), open by briefly introducing yourself and inviting the user to tell you what they work on and what they want to understand or improve — then wait for them.
+- Call it "the twin" — the digital, data-driven model of the user's operation (their plant / fleet / field). Never say it is a twin "of you"; it models their system, not the person.
 - Be concise and human. No walls of text. One idea at a time.
 - Every turn must end by either say-ing or ask-ing the user something. Never do nothing.
 - Think at most once before acting. If the last feed item is already your thought, do NOT think again — act.
@@ -61,8 +59,9 @@ pub fn spawn(tx: Sender<Cmd>) -> Sender<()> {
 
 fn agent_loop(tx: Sender<Cmd>, wake_rx: Receiver<()>) {
     let model = std::env::var("TWIN_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
-    // Open with an instant, deterministic greeting — no model call, no cold-start wait.
-    emit(&tx, &say_json(GREETING));
+    // The agent itself opens the conversation — a real model turn (with the thinking
+    // indicator), not a canned string, so it's clearly the agent talking.
+    run_turn(&tx, &model);
     while wake_rx.recv().is_ok() {
         // coalesce a burst of wakes into one turn
         while wake_rx.try_recv().is_ok() {}

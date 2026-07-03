@@ -43,6 +43,20 @@ fn mounting_a_file_appears_in_perception_and_renders() {
 }
 
 #[test]
+fn opening_a_source_renders_a_browsable_table() {
+    let path = write_temp_csv();
+    let mut g = JsGraph::new_twin();
+    g.twin_read_source("turbines", &path, "mounted");
+    // the user clicks the source in the UI → backward event
+    g.twin_event(r#"{"type":"open_source","name":"turbines"}"#);
+    let muts = g.twin_from(0);
+    assert!(muts.contains("explorer-root"), "explorer table not rendered");
+    assert!(muts.contains("exp:tbl"));
+    assert!(muts.contains("gearbox_temp"), "column header missing");
+    assert!(muts.contains("WT-01"), "row data missing");
+}
+
+#[test]
 fn missing_file_reports_a_readable_error() {
     let mut g = JsGraph::new_twin();
     let status = g.twin_read_source("nope", "/no/such/file.csv", "mounted");

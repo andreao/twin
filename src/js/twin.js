@@ -31,7 +31,7 @@ const T = (() => {
     for (const [row] of delta.entries()) profile.set(row.get('field'), row.get('value'));
   });
   G.observe(skillsSrc, (delta) => {
-    for (const [row] of delta.entries()) skillsPanel.set(row.get('name'), row.get('description'));
+    for (const [row] of delta.entries()) skillsPanel.set(row.get('name'), row.get('title'), row.get('description'));
   });
 
   const sourceIds = new Map(); // name -> graph source node id
@@ -83,11 +83,46 @@ const T = (() => {
     append('system', { text: `Couldn't read “${name}”: ${msg}` });
   }
 
+  // Render a mounted source's rows as a browsable table in the data explorer (§11.7-ish,
+  // a plain snapshot for now).  Proves a lens that actually pulled something is
+  // explorable: the twin renders the materialized rows into 'explorer-root'.
+  let explorerKeys = [];
+  const MAX_EXPLORE_ROWS = 200;
+  function openSource(name) {
+    const s = sources.get(name);
+    const id = sourceIds.get(name);
+    if (!s || id === undefined) return;
+    const rows = G.stateOf(id).support().slice(0, MAX_EXPLORE_ROWS).map((r) => r.asObject());
+    const cols = Object.keys(s.schema);
+    const push = (m) => TWIN_MUT.push(m);
+    for (const k of explorerKeys) push({ op: 'remove', key: k });
+    explorerKeys = [];
+    const add = (m) => { push(m); explorerKeys.push(m.key); };
+
+    add({ op: 'create', key: 'exp:note', tag: 'div', parent: 'explorer-root', index: 0 });
+    push({ op: 'setAttr', key: 'exp:note', name: 'class', value: 'explorer-note' });
+    push({ op: 'setText', key: 'exp:note', text: `${s.residence} · ${cols.length} columns · showing ${rows.length} of ${s.rowcount} rows` });
+    add({ op: 'create', key: 'exp:tbl', tag: 'table', parent: 'explorer-root', index: 1 });
+    add({ op: 'create', key: 'exp:thead', tag: 'thead', parent: 'exp:tbl', index: 0 });
+    add({ op: 'create', key: 'exp:htr', tag: 'tr', parent: 'exp:thead', index: 0 });
+    cols.forEach((c, i) => { add({ op: 'create', key: `exp:th:${i}`, tag: 'th', parent: 'exp:htr', index: i }); push({ op: 'setText', key: `exp:th:${i}`, text: c }); });
+    add({ op: 'create', key: 'exp:tb', tag: 'tbody', parent: 'exp:tbl', index: 1 });
+    rows.forEach((row, ri) => {
+      add({ op: 'create', key: `exp:r:${ri}`, tag: 'tr', parent: 'exp:tb', index: ri });
+      cols.forEach((c, ci) => {
+        const ck = `exp:c:${ri}:${ci}`;
+        add({ op: 'create', key: ck, tag: 'td', parent: `exp:r:${ri}`, index: ci });
+        push({ op: 'setText', key: ck, text: row[c] == null ? '' : String(row[c]) });
+      });
+    });
+  }
+
   // Install a skill (§4.1) — called by the core skills-loader from the static dir.
   function installSkill(name, meta) {
     if (skills.has(name)) return;
-    skills.set(name, { description: meta.description || '', files: meta.files || [] });
-    G.submit(skillsSrc, ZSet.fromRows([rec({ name, description: meta.description || '' })]), prov('core'));
+    const title = meta.title || name;
+    skills.set(name, { title, description: meta.description || '', files: meta.files || [] });
+    G.submit(skillsSrc, ZSet.fromRows([rec({ name, title, description: meta.description || '' })]), prov('core'));
   }
 
   // ---- agent tool surface (§12.1) -------------------------------------------
@@ -116,6 +151,8 @@ const T = (() => {
       const q = feed.items.find((it) => it.seq === s);
       const opt = q && q.options ? q.options[idx] : null;
       append('user', { text: opt != null ? String(opt) : `option ${idx + 1}` });
+    } else if (e.type === 'open_source' && e.name) {
+      openSource(String(e.name));
     }
   }
 

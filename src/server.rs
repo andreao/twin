@@ -69,11 +69,25 @@ fn graph_loop(rx: Receiver<Cmd>, wake: Sender<()>) {
     // `skills/` directory on startup, so the agent knows what capabilities it has.
     let found = crate::skills::discover("skills");
     for sk in &found {
-        g.twin_install_skill(&sk.name, &sk.description, &sk.files);
+        g.twin_install_skill(&sk.name, &sk.title, &sk.description, &sk.files);
     }
     if !found.is_empty() {
         println!("loaded {} skill(s): {}", found.len(),
             found.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", "));
+    }
+
+    // Bootstrap: mount any corpora a skill has already pulled to disk, so data the
+    // twin "has" is actually known and browsable in the app. (Interim seam until the
+    // agent-driven boundary lens does this itself with lineage.)
+    for (name, path) in [
+        ("assets", "data/cognite/assets.csv"),
+        ("timeseries", "data/cognite/timeseries.csv"),
+        ("events", "data/cognite/events.csv"),
+    ] {
+        if std::path::Path::new(path).exists() {
+            let status = g.twin_read_source(name, path, "mounted");
+            println!("mounted {status}");
+        }
     }
 
     let mut clients: Vec<Sender<String>> = Vec::new();

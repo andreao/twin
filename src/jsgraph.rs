@@ -98,8 +98,8 @@ impl JsGraph {
     }
 
     /// Install a skill (§4.1) into the twin — used by the core skills-loader (§11.13).
-    pub fn twin_install_skill(&mut self, name: &str, description: &str, files: &[String]) {
-        let meta = serde_json::json!({ "description": description, "files": files }).to_string();
+    pub fn twin_install_skill(&mut self, name: &str, title: &str, description: &str, files: &[String]) {
+        let meta = serde_json::json!({ "title": title, "description": description, "files": files }).to_string();
         self.call(&format!("T.installSkill({name:?}, {meta})"));
     }
 
