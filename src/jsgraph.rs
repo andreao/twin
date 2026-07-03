@@ -15,7 +15,9 @@ use crate::runtime::{Branch, Runtime};
 const JS_ZSET: &str = include_str!("js/zset.js");
 const JS_GRAPH: &str = include_str!("js/graph.js");
 const JS_TABLE: &str = include_str!("js/table.js");
+const JS_VIEWS: &str = include_str!("js/views.js");
 const JS_MILESTONE: &str = include_str!("js/milestone.js");
+const JS_TWIN: &str = include_str!("js/twin.js");
 
 pub struct JsGraph {
     rt: Runtime,
@@ -55,6 +57,77 @@ impl JsGraph {
         let combined = format!("{}\n{}\n{}", JS_ZSET, JS_GRAPH, JS_TABLE);
         rt.eval(&branch, &combined).expect("load JS dataflow runtime");
         JsGraph { rt, branch, defs: DefinitionStore::new() }
+    }
+
+    /// Load the runtime + the twin app graph (§9, §11) into a fresh V8 branch and
+    /// seed demo data — the Phase 0 live-spine graph the server drives.
+    pub fn new_twin() -> Self {
+        let mut rt = Runtime::new();
+        let branch = rt.branch("main", false);
+        let combined = format!(
+            "{}\n{}\n{}\n{}\n{}",
+            JS_ZSET, JS_GRAPH, JS_TABLE, JS_VIEWS, JS_TWIN
+        );
+        rt.eval(&branch, &combined).expect("load twin graph");
+        JsGraph { rt, branch, defs: DefinitionStore::new() }
+    }
+
+    /// Total length of the append-only mutation stream (§11.3).
+    pub fn twin_total(&mut self) -> usize {
+        self.call("T.total()").parse().unwrap_or(0)
+    }
+
+    /// The mutation stream slice `[n..)` as a JSON array (the §11.3 forward IR).
+    pub fn twin_from(&mut self, n: usize) -> String {
+        self.call(&format!("T.from({n})"))
+    }
+
+    /// Push a backward UI event (§11.4) as JSON into the graph.
+    pub fn twin_event(&mut self, json: &str) {
+        self.call(&format!("T.event({json:?})"));
+    }
+
+    /// Apply an agent tool-call (§12.1) — `{"tool":..,"args":..}` — as a graph edit.
+    pub fn twin_agent_tool(&mut self, json: &str) {
+        self.call(&format!("T.agentTool({json:?})"));
+    }
+
+    /// The structured projection the agent perceives (§12.3), as JSON.
+    pub fn twin_perceive(&mut self) -> String {
+        self.call("T.perceive()")
+    }
+
+    /// Install a skill (§4.1) into the twin — used by the core skills-loader (§11.13).
+    pub fn twin_install_skill(&mut self, name: &str, description: &str, files: &[String]) {
+        let meta = serde_json::json!({ "description": description, "files": files }).to_string();
+        self.call(&format!("T.installSkill({name:?}, {meta})"));
+    }
+
+    /// Mount a local file as a source (§9.9) — federation, not export.  We materialize
+    /// only a bounded subset in-heap (§15.1 disposable view); if the file is larger,
+    /// it stays `mounted-partial` (the selective-sync point of the residence model).
+    /// The file remains the source of truth.  Returns a short status for dev logs.
+    pub fn twin_read_source(&mut self, name: &str, path: &str, mode: &str) -> String {
+        const MATERIALIZE_CAP: usize = 5000;
+        match crate::source::read_file(path) {
+            Ok(rows) => {
+                let total = rows.len();
+                let take = total.min(MATERIALIZE_CAP);
+                let residence = if total > take { "mounted-partial" } else { mode };
+                let rows_json = serde_json::to_string(&rows[..take]).unwrap_or_else(|_| "[]".into());
+                let meta = serde_json::json!({
+                    "locator": path, "residence": residence,
+                    "rowcount": total, "materialized": take,
+                })
+                .to_string();
+                self.call(&format!("T.mountSource({name:?}, {meta}, {rows_json})"));
+                format!("mounted {name}: {total} rows ({residence})")
+            }
+            Err(e) => {
+                self.call(&format!("T.sourceError({name:?}, {e:?})"));
+                format!("read_source error: {e}")
+            }
+        }
     }
 
     /// Evaluate an expression against the graph branch (returns the JS result).

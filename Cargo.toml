@@ -12,6 +12,10 @@ path = "src/lib.rs"
 name = "twin"
 path = "src/main.rs"
 
+[[bin]]
+name = "serve"
+path = "src/bin/serve.rs"
+
 [dependencies]
 v8 = "130"
 sha2 = "0.10"

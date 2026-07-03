@@ -1,0 +1,233 @@
+<title>twin</title>
+<style>
+  :root {
+    --bg: #faf9f7; --panel: #ffffff; --ink: #22201d; --muted: #8a857c;
+    --line: #eae7e1; --accent: #c96442; --accent-soft: #f5e9e3; --user: #eef1f4;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 -apple-system, "SF Pro Text", system-ui, sans-serif;
+  }
+  .shell { display: grid; grid-template-columns: 264px 1fr; height: 100vh; }
+
+  /* ---- rail ---- */
+  .rail { border-right: 1px solid var(--line); background: var(--panel); padding: 20px 16px; display: flex; flex-direction: column; overflow: hidden; }
+  .brand { font-weight: 650; font-size: 16px; letter-spacing: -0.01em; margin-bottom: 20px; display: flex; align-items: center; gap: 8px; }
+  .brand .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+  .nav { display: flex; flex-direction: column; gap: 2px; }
+  .navitem { padding: 7px 10px; border-radius: 8px; color: var(--muted); font-size: 14px; cursor: default; }
+  .navitem.active { background: var(--accent-soft); color: var(--ink); }
+  .navlabel { text-transform: uppercase; font-size: 10.5px; letter-spacing: 0.09em; color: var(--muted); margin: 22px 4px 8px; }
+  .profile, .sources { overflow: auto; flex: none; }
+  .pf-row { display: grid; grid-template-columns: 84px 1fr; gap: 8px; padding: 5px 6px; border-radius: 7px; }
+  .pf-row:hover { background: var(--bg); }
+  .pf-k { color: var(--muted); font-size: 12px; text-transform: capitalize; }
+  .pf-v { font-size: 13px; }
+  .profile:empty::after { content: "nothing yet — I'm still getting to know you."; color: var(--muted); font-size: 12.5px; font-style: italic; }
+  .sources:empty::after { content: "no data yet — point me at a file."; color: var(--muted); font-size: 12.5px; font-style: italic; }
+  .src-row { padding: 6px; border-radius: 7px; }
+  .src-row:hover { background: var(--bg); }
+  .src-n { font-size: 13px; font-weight: 550; }
+  .src-d { font-size: 11.5px; color: var(--muted); }
+
+  /* ---- main ---- */
+  .main { display: flex; flex-direction: column; min-width: 0; }
+  .topbar { padding: 14px 28px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; }
+  .topbar h1 { font-size: 14px; font-weight: 600; margin: 0; }
+  .status { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 7px; }
+  .status .dot { width: 7px; height: 7px; border-radius: 50%; background: #ccc; }
+  .status.live .dot { background: #4a9d5b; }
+
+  .navitem { cursor: pointer; }
+  .section-view { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px; }
+  .empty { max-width: 420px; text-align: center; color: var(--muted); font-size: 14px; line-height: 1.6; }
+  .empty b { color: var(--ink); display: block; margin-bottom: 6px; font-size: 15px; }
+  .feedwrap { flex: 1; overflow-y: auto; }
+  .feed { max-width: 720px; margin: 0 auto; padding: 28px 28px 8px; display: flex; flex-direction: column; gap: 4px; }
+
+  .feed-item { padding: 8px 0; animation: rise .28s ease; }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+  .feed-item.agent .text { font-size: 15.5px; }
+  .feed-item.user { display: flex; justify-content: flex-end; }
+  .feed-item.user .text { background: var(--user); padding: 9px 14px; border-radius: 14px 14px 3px 14px; max-width: 78%; }
+
+  .feed-item.thought { padding: 2px 0 6px; }
+  .feed-item.thought::before { content: "Thought process"; display: block; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin-bottom: 2px; }
+  .feed-item.thought .text { color: var(--muted); font-size: 13.5px; font-style: italic; }
+
+  .feed-item.system { padding: 4px 0; }
+  .feed-item.system .text { display: inline-block; background: var(--accent-soft); color: #7a4a38; font-size: 12.5px; padding: 5px 11px; border-radius: 8px; }
+
+  .feed-item.question { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; margin: 6px 0; box-shadow: 0 1px 2px rgba(0,0,0,.02); }
+  .feed-item.question .q-text { font-weight: 550; margin-bottom: 12px; }
+  .q-option { display: block; width: 100%; text-align: left; background: var(--bg); border: 1px solid var(--line); border-radius: 9px; padding: 10px 13px; margin: 6px 0; font: inherit; color: var(--ink); cursor: pointer; transition: background .12s, border-color .12s; }
+  .q-option:hover { background: var(--accent-soft); border-color: var(--accent); }
+
+  .working { max-width: 720px; margin: 0 auto; padding: 4px 28px 10px; height: 22px; color: var(--muted); font-size: 13px; display: none; align-items: center; gap: 8px; }
+  .working.on { display: flex; }
+  .spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--accent-soft); border-top-color: var(--accent); animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ---- composer ---- */
+  .composer { border-top: 1px solid var(--line); background: var(--panel); padding: 14px 28px 18px; }
+  .composer-inner { max-width: 720px; margin: 0 auto; display: flex; gap: 10px; align-items: flex-end; background: var(--bg); border: 1px solid var(--line); border-radius: 14px; padding: 8px 8px 8px 14px; }
+  .composer textarea { flex: 1; border: none; background: transparent; resize: none; font: inherit; color: var(--ink); outline: none; max-height: 140px; padding: 6px 0; }
+  .composer button { border: none; background: var(--accent); color: #fff; border-radius: 10px; width: 34px; height: 34px; font-size: 16px; cursor: pointer; flex: none; }
+  .composer button:disabled { opacity: .4; cursor: default; }
+  .hint { max-width: 720px; margin: 6px auto 0; color: var(--muted); font-size: 11.5px; text-align: center; }
+</style>
+
+<div class="shell">
+  <aside class="rail">
+    <div class="brand"><span class="dot"></span> twin</div>
+    <div class="nav">
+      <div class="navitem active" data-view="workspace">Workspace</div>
+      <div class="navitem" data-view="artifacts">Artifacts</div>
+      <div class="navitem" data-view="tasks">Tasks</div>
+      <div class="navitem" data-view="scheduled">Scheduled</div>
+    </div>
+    <div class="navlabel">Skills</div>
+    <div class="sources" id="skills-root"></div>
+    <div class="navlabel">Data sources</div>
+    <div class="sources" id="sources-root"></div>
+    <div class="navlabel">What the twin knows about you</div>
+    <div class="profile" id="profile-root"></div>
+  </aside>
+
+  <section class="main">
+    <div class="topbar">
+      <h1 id="viewtitle">Workspace</h1>
+      <div class="status" id="status"><span class="dot"></span><span id="statustext">connecting…</span></div>
+    </div>
+    <div class="feedwrap" id="feedwrap">
+      <div class="feed" id="feed-root"></div>
+    </div>
+    <div class="section-view" id="section-view" hidden><div class="empty" id="section-empty"></div></div>
+    <div class="working" id="working"><span class="spin"></span> twin is thinking…</div>
+    <div class="composer">
+      <div class="composer-inner">
+        <textarea id="input" rows="1" placeholder="Message your twin, or steer it…"></textarea>
+        <button id="send" title="Send">↑</button>
+      </div>
+      <div class="hint">The twin leads. You supply what it can't know — who you are, your goals, your data.</div>
+    </div>
+  </section>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  // Thin host: keep Map<Key,Node>, apply the forward mutation IR (§11.3), send back
+  // the backward event stream (§11.4). Roots are pre-seeded from the static shell.
+  const nodes = new Map();
+  nodes.set("feed-root", document.getElementById("feed-root"));
+  nodes.set("profile-root", document.getElementById("profile-root"));
+  nodes.set("sources-root", document.getElementById("sources-root"));
+  nodes.set("skills-root", document.getElementById("skills-root"));
+
+  const feedwrap = document.getElementById("feedwrap");
+  const statusEl = document.getElementById("status");
+  const statusText = document.getElementById("statustext");
+  const workingEl = document.getElementById("working");
+  const input = document.getElementById("input");
+  const sendBtn = document.getElementById("send");
+
+  let ws;
+  function connect() {
+    ws = new WebSocket(`ws://${location.host}/ws`);
+    ws.onopen = () => { statusEl.classList.add("live"); statusText.textContent = "live"; };
+    ws.onclose = () => {
+      statusEl.classList.remove("live"); statusText.textContent = "reconnecting…";
+      setTimeout(connect, 1000);
+    };
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === "mutations") { msg.batch.forEach(applyMutation); autoscroll(); }
+      else if (msg.type === "status") { workingEl.classList.toggle("on", !!msg.working); autoscroll(); }
+    };
+  }
+
+  function insertAt(parent, el, index) {
+    parent.insertBefore(el, parent.children[index] || null);
+  }
+
+  function applyMutation(m) {
+    switch (m.op) {
+      case "create": {
+        const el = document.createElement(m.tag);
+        el.dataset.key = m.key;
+        nodes.set(m.key, el);
+        const parent = nodes.get(m.parent);
+        if (parent) insertAt(parent, el, m.index);
+        break;
+      }
+      case "move": { const el = nodes.get(m.key), p = nodes.get(m.parent); if (el && p) insertAt(p, el, m.index); break; }
+      case "setText": { const el = nodes.get(m.key); if (el && document.activeElement !== el) el.textContent = m.text; break; }
+      case "setAttr": { const el = nodes.get(m.key); if (el) { if (m.value == null) el.removeAttribute(m.name); else el.setAttribute(m.name, m.value); } break; }
+      case "setProp": { const el = nodes.get(m.key); if (el) el[m.name] = m.value; break; }
+      case "remove": { const el = nodes.get(m.key); if (el) el.remove(); nodes.delete(m.key); break; }
+      case "listen": {
+        const el = nodes.get(m.key);
+        if (el && m.key.startsWith("option:")) {
+          el.addEventListener("click", () => send({ type: "choose", target: m.key }));
+        }
+        break;
+      }
+    }
+  }
+
+  function autoscroll() {
+    // keep the newest content in view unless the user has scrolled up
+    if (feedwrap.scrollHeight - feedwrap.scrollTop - feedwrap.clientHeight < 160) {
+      feedwrap.scrollTop = feedwrap.scrollHeight;
+    }
+  }
+
+  function send(ev) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(ev)); }
+
+  function submitMessage() {
+    const text = input.value.trim();
+    if (!text) return;
+    send({ type: "user_message", text });
+    input.value = ""; input.style.height = "auto";
+  }
+
+  input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = input.scrollHeight + "px"; });
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitMessage(); } });
+  sendBtn.addEventListener("click", submitMessage);
+
+  // ---- lightweight view switching (placeholder sections have honest empty states)
+  const SECTIONS = {
+    workspace: null,
+    artifacts: ["Artifacts", "No artifacts yet. As we explore your data, I'll build derived views here — live tables, charts, and lenses you can open, share, and branch."],
+    tasks: ["Tasks", "No tasks yet. When I run background work — exploring data, cleaning it, watching for issues — it'll show up here so you can follow along."],
+    scheduled: ["Scheduled", "Nothing scheduled yet. Once the twin has data, we can set up recurring jobs — like a nightly data-quality check, or re-deriving views when a source changes."],
+  };
+  const sectionView = document.getElementById("section-view");
+  const sectionEmpty = document.getElementById("section-empty");
+  const viewTitle = document.getElementById("viewtitle");
+  const composer = document.querySelector(".composer");
+  document.querySelectorAll(".navitem").forEach((item) => {
+    item.addEventListener("click", () => {
+      document.querySelectorAll(".navitem").forEach((n) => n.classList.remove("active"));
+      item.classList.add("active");
+      const view = item.dataset.view;
+      const isWorkspace = view === "workspace";
+      viewTitle.textContent = item.textContent;
+      feedwrap.hidden = !isWorkspace;
+      workingEl.style.display = isWorkspace ? "" : "none";
+      composer.style.display = isWorkspace ? "" : "none";
+      sectionView.hidden = isWorkspace;
+      if (!isWorkspace) {
+        const [title, body] = SECTIONS[view];
+        sectionEmpty.innerHTML = `<b>${title}</b>${body}`;
+      }
+    });
+  });
+
+  connect();
+})();
+</script>

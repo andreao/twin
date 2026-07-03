@@ -11,6 +11,7 @@
 //! globals from scratch (§6.1), which Node's ambient global realm does not allow.
 
 pub mod adapter;
+pub mod agent;
 pub mod definitions;
 pub mod engine;
 pub mod hashing;
@@ -18,6 +19,10 @@ pub mod jsgraph;
 pub mod layers;
 pub mod pmap;
 pub mod runtime;
+pub mod server;
+pub mod skills;
+pub mod source;
+pub mod ws;
 
 pub use adapter::{MockDb, PollDiffAdapter};
 pub use definitions::{Definition, DefinitionStore};
