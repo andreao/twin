@@ -30,8 +30,18 @@ pub enum Cmd {
     AgentTool(String),
     /// The agent asks for its perception (§12.3); we reply with the projection JSON.
     Perceive(Sender<String>),
-    /// The agent's working state, surfaced to the UI (the "thinking…" indicator).
-    Status(bool),
+    /// The agent's working state, surfaced to the UI: foreground turns show the
+    /// in-feed "thinking…" indicator, background turns pulse the agent rail.
+    Status { working: bool, background: bool },
+}
+
+/// Wall-clock milliseconds — a BOUNDARY fact (§9.8): raw events are stamped here as
+/// they cross into the graph; time is never computed inside the graph itself.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// Start the server (blocking). `addr` like "127.0.0.1:8080".
@@ -110,24 +120,33 @@ fn graph_loop(rx: Receiver<Cmd>, wake: Sender<()>) {
                 }
             }
             Cmd::Event(json) => {
-                let ev: Option<serde_json::Value> = serde_json::from_str(&json).ok();
-                let etype = ev.as_ref().and_then(|v| v["type"].as_str()).unwrap_or("");
-                match etype {
-                    // a boundary fetch (§9.9): invoke a named host capability by
-                    // (adapter, id).  The core routes by adapter key; it doesn't know
-                    // the domain (here: a time-series lens materialized on demand).
-                    "fetch" => {
-                        let v = ev.as_ref().unwrap();
+                let mut ev: Option<serde_json::Value> = serde_json::from_str(&json).ok();
+                let etype = ev
+                    .as_ref()
+                    .and_then(|v| v["type"].as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if let Some(v) = ev.as_mut() {
+                    // EVERY user action is captured in its rawest form (§8 pure event
+                    // sourcing): stamp arrival time at the boundary and record the event
+                    // verbatim in the graph's `input` stream; feed items, renders, and the
+                    // agent's read of the user are all derived from it, with lineage.
+                    v["ts"] = serde_json::json!(now_ms());
+                    g.twin_event(&v.to_string());
+                    // a boundary fetch (§9.9) additionally invokes a named host capability
+                    // by (adapter, id).  The core routes by adapter key only; it doesn't
+                    // know the domain (here: a time-series lens materialized on demand).
+                    if etype == "fetch" {
                         let adapter = v["adapter"].as_str().unwrap_or("");
                         let id = v["id"].as_str().unwrap_or("");
                         let label = v["label"].as_str().unwrap_or(id);
                         g.twin_fetch(adapter, id, label);
                     }
-                    _ => g.twin_event(&json),
                 }
                 broadcast_new(&mut g, &mut cursor, &mut clients);
-                // wake the agent only when the user actually steered (not on UI nav)
-                if etype == "user_message" {
+                // wake the agent when the user addressed it (typed or answered a card);
+                // pure navigation is still captured raw, and perceived on the next turn.
+                if etype == "user_message" || etype == "choose" {
                     wake.send(()).ok();
                 }
             }
@@ -138,8 +157,10 @@ fn graph_loop(rx: Receiver<Cmd>, wake: Sender<()>) {
             Cmd::Perceive(reply) => {
                 reply.send(g.twin_perceive()).ok();
             }
-            Cmd::Status(working) => {
-                let msg = format!("{{\"type\":\"status\",\"working\":{working}}}");
+            Cmd::Status { working, background } => {
+                let msg = format!(
+                    "{{\"type\":\"status\",\"working\":{working},\"background\":{background}}}"
+                );
                 clients.retain(|c| c.send(msg.clone()).is_ok());
             }
         }

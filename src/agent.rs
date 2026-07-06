@@ -4,16 +4,21 @@
 //! perceives the graph as a structured projection (§12.3) and acts by emitting
 //! tool-calls that become graph edits (§12.1).  A model call is one governed, slow
 //! effect (§9.8); here it is an HTTP call to a LOCAL model (Ollama), driven with our
-//! own prompt-based tool protocol so it stays model-agnostic.  The agent runs on its
-//! own thread: it greets on startup, then wakes whenever the user steers.
+//! own prompt-based tool protocol so it stays model-agnostic.
 //!
-//! Kept deliberately small for Phase 1 — tools: think / say / ask / record_profile /
-//! wait.  Reading sources and authoring lenses (§9.9, §4.1) arrive in Phase 2.
+//! The agent runs on its own thread and is ALWAYS working: user input runs a
+//! foreground turn, and whenever the wake channel stays quiet the loop times out into
+//! BACKGROUND turns — the agent's own work time (profiling sources, recording
+//! findings, authoring lenses, planning).  The user preempts background work at any
+//! moment: a wake mid-turn aborts it and runs a foreground turn.  When the agent
+//! finds nothing worth doing it idles with exponential backoff, so an idle twin
+//! costs (almost) no compute while an active one uses all it can get.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
+use std::time::Duration;
 
 use crate::server::Cmd;
 
@@ -23,7 +28,32 @@ const DEFAULT_MODEL: &str = "gemma4:12b";
 
 /// A turn runs at most this many tool-calls before yielding, so a misbehaving model
 /// can never loop forever.
-const MAX_STEPS: usize = 3;
+const MAX_STEPS: usize = 5;
+
+/// Background pacing: first background turn fires this long after the last activity…
+const BG_FIRST_IDLE: Duration = Duration::from_secs(4);
+/// …productive background turns chain at this cadence…
+const BG_BETWEEN: Duration = Duration::from_secs(2);
+/// …and an agent with nothing to do backs off (doubling) up to this ceiling.
+const BG_MAX_IDLE: Duration = Duration::from_secs(120);
+
+#[derive(Clone, Copy, PartialEq)]
+enum Mode {
+    /// The user steered — answer them.
+    Foreground,
+    /// The wake channel is quiet — the agent's own work time.
+    Background,
+}
+
+/// What a turn amounted to, driving the loop's pacing.
+enum Outcome {
+    /// The agent did real work (or spoke) — keep the cadence tight.
+    Acted,
+    /// Nothing worth doing — back off.
+    Idled,
+    /// The user spoke mid-background-turn — drop the work, serve them.
+    Preempted,
+}
 
 const SYSTEM_PROMPT: &str = r#"You are a sharp, autonomous AI that builds and operates ONE user's "twin" — a living digital twin of their industrial system (a plant, a fleet, a field, a process). You are NOT the twin and not a twin of the user; you are the intelligence that grows and drives it. YOU are the driver: you decide what to do next and do it; the user steers and supplies domain knowledge you cannot have. You do not wait to be told each step — you take initiative, then check in.
 
@@ -31,16 +61,24 @@ Why you can act boldly: EVERYTHING is governed. Every change happens in a branch
 
 You communicate through RICH VISUALS, not walls of text. When you have data to present — rows, a hierarchy, a document — you render it as a real component in the conversation with the `show` tool. NEVER paste tabular data as markdown or text; that is wrong and unusable. Show a table, a tree, or a document.
 
+You are always working: when the user speaks you answer, and between conversations you run BACKGROUND turns on your own compute (a brief will mark them). Use background time to profile data, find issues, author useful lenses, keep your agenda current, and prepare pointed questions.
+
 You act by emitting exactly ONE JSON object per turn — no prose outside it, no markdown fences. The tools:
 - {"tool":"think","args":{"text":"..."}}  brief private reasoning, shown as your thought process. Think once, then act.
 - {"tool":"say","args":{"text":"..."}}  a short, warm message. For PROSE only — never for data.
 - {"tool":"ask","args":{"question":"...","options":["...","..."]}}  ask ONE focused question; options are quick-picks. Asking is a first-class part of driving: YOU direct the collaboration by asking the human for the judgment, priorities, and domain knowledge only they have. Ask whenever it moves the work forward — just make each question pointed and worth their time. After you ask, you pause for them.
-- {"tool":"show","args":{"view":"table","source":"<name>","columns":["..."],"limit":10,"filter":"...","title":"..."}}  render a REAL component inline in the conversation. view="table" (a data table; columns/limit/filter optional), view="tree" (an equipment hierarchy from a source like assets), or view="document" with "name":"<file>" (a P&ID/drawing/PDF viewer). This is how you present anything data-shaped.
-- {"tool":"record_profile","args":{"field":"...","value":"..."}}  save a durable fact about the user (role, goal, industry, data) the moment you learn it.
+- {"tool":"show","args":{"view":"table","source":"<name>","columns":["..."],"limit":10,"filter":"...","title":"..."}}  render a REAL component inline in the conversation. view="table" (a data table; columns/limit/filter optional), view="tree" (an equipment hierarchy from a source like assets), or view="document" with "name":"<file>" (a P&ID/drawing/PDF viewer). This is how you present anything data-shaped. Works on lens:* sources too.
+- {"tool":"record_profile","args":{"field":"...","value":"..."}}  save a durable fact about the user (role, goal, industry, data) the moment you learn it — including goals you INFER from their raw actions.
 - {"tool":"read_source","args":{"path":"/absolute/path/to/file.csv"}}  mount a local file (CSV/JSON/JSONL) — federates it (no copy); it then appears in your perception under "sources".
-- {"tool":"inspect","args":{"source":"<name>"}}  compute quick stats over a mounted source; the result lands in the feed for you to summarize.
+- {"tool":"inspect","args":{"source":"<name>"}}  profile a mounted source: ranges, empties, duplicates. The result lands in your activity log for the next turn.
+- {"tool":"plan","args":{"items":["...","..."]}}  add items to your agenda — your own to-do list, visible to the user.
+- {"tool":"work","args":{"task":"<id or text>","text":"what you're doing"}}  log progress; marks that agenda item active.
+- {"tool":"done","args":{"task":"<id or text>"}}  mark an agenda item done.
+- {"tool":"finding","args":{"severity":"info"|"warn"|"critical","text":"...","source":"<name>"}}  record a data issue or insight you discovered — it lands on the user's Findings board with your name on it. Never re-file one already in "findings".
+- {"tool":"make_lens","args":{"name":"...","source":"<name>","code":"return rows.filter(r => ...)","title":"..."}}  AUTHOR a new lens: pure JavaScript, gets `rows` (array of plain objects) from the source, returns an array of rows. It becomes a live derived source lens:<name> with full lineage (source + your code + you as author), browsable like any source. Use it to clean, slice, aggregate, or flag data in ways that might be useful.
+- {"tool":"idle","args":{}}  background only: nothing worth doing right now.
 
-You perceive the twin as JSON each turn: "profile", "sources" (mounted data with schema + sample rows), "skills" (capabilities — e.g. obtain-oid pulls real oil-&-gas data), and "feed" (the conversation). A turn ends when you say or ask; think / show / record_profile / read_source / inspect continue the turn — so you can inspect a source and THEN show a table of it and THEN say one line about it, all in one turn.
+You perceive the twin as JSON each turn: "profile", "sources" (schema + sample rows), "skills", "agenda" (your to-do list), "findings" (issues you already recorded), "lenses" (lenses you already authored), "activity" (your recent work log — inspect results land here), "userActions" (the user's RAW recent actions: every click, search, view — they are recorded verbatim with lineage; derive the user's goals from what they actually DO and record_profile what you infer), and "feed" (the conversation). A turn ends when you say or ask; every other tool continues the turn — so you can inspect, then make a lens of what you found, then show it, all in one turn.
 
 Rules:
 - Output ONE valid JSON object only. Nothing before or after it.
@@ -51,7 +89,10 @@ Rules:
 - Think at most once before acting. If the last feed item is your own thought, act — do not think again.
 - Record profile facts the moment you learn them.
 - If the user's latest message contains a file path, your VERY NEXT action MUST be read_source with that exact path.
-- You both act AND ask — take initiative on safe, reversible work, and ask the user pointed questions to steer it. Don't ask permission for reversible steps; do ask for the judgment and domain knowledge only they have. End each turn by say-ing what you did/showing it, or by ask-ing."#;
+- You both act AND ask — take initiative on safe, reversible work, and ask the user pointed questions to steer it. Don't ask permission for reversible steps; do ask for the judgment and domain knowledge only they have. End each foreground turn by say-ing what you did/showing it, or by ask-ing."#;
+
+/// Appended to background turns: the agent's own work time, and how to spend it.
+const BACKGROUND_BRIEF: &str = "BACKGROUND TURN — the user has NOT spoken; this is your own work time on your own compute. Do real proactive work now: keep your agenda current (plan / work / done); inspect sources you haven't profiled (check activity for what you already did); record data issues or insights as findings; author a lens with make_lens when you see a useful derivation; infer the user's goals from userActions and record_profile them. Do NOT use `say` — nobody is waiting on the chat. If ONE pointed question would unblock better work, use `ask` — it waits for the user as a card. If there is truly nothing left worth doing, emit {\"tool\":\"idle\",\"args\":{}}.";
 
 /// Spawn the agent thread. Returns a wake channel the graph pokes on user input.
 pub fn spawn(tx: Sender<Cmd>) -> Sender<()> {
@@ -64,42 +105,84 @@ fn agent_loop(tx: Sender<Cmd>, wake_rx: Receiver<()>) {
     let model = std::env::var("TWIN_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
     // The agent itself opens the conversation — a real model turn (with the thinking
     // indicator), not a canned string, so it's clearly the agent talking.
-    run_turn(&tx, &model);
-    while wake_rx.recv().is_ok() {
-        // coalesce a burst of wakes into one turn
-        while wake_rx.try_recv().is_ok() {}
-        run_turn(&tx, &model);
+    run_turn(&tx, &model, Mode::Foreground, &wake_rx);
+    let mut idle = BG_FIRST_IDLE;
+    loop {
+        match wake_rx.recv_timeout(idle) {
+            // the user steered — coalesce a burst of wakes into one foreground turn
+            Ok(()) => {
+                while wake_rx.try_recv().is_ok() {}
+                run_turn(&tx, &model, Mode::Foreground, &wake_rx);
+                idle = BG_FIRST_IDLE;
+            }
+            // quiet — the agent's own work time
+            Err(RecvTimeoutError::Timeout) => {
+                match run_turn(&tx, &model, Mode::Background, &wake_rx) {
+                    Outcome::Preempted => {
+                        while wake_rx.try_recv().is_ok() {}
+                        run_turn(&tx, &model, Mode::Foreground, &wake_rx);
+                        idle = BG_FIRST_IDLE;
+                    }
+                    Outcome::Acted => idle = BG_BETWEEN,
+                    Outcome::Idled => idle = std::cmp::min(idle * 2, BG_MAX_IDLE),
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
     }
 }
 
 /// One turn: perceive → model → apply a tool, repeated until the agent yields
-/// (ask/wait) or hits the step cap. Thoughts are capped at one per turn so the model
-/// can't loop on "thinking" without acting.
-fn run_turn(tx: &Sender<Cmd>, model: &str) {
-    tx.send(Cmd::Status(true)).ok();
+/// (say/ask/idle) or hits the step cap. Thoughts are capped at one per turn so the
+/// model can't loop on "thinking" without acting. Background turns check the wake
+/// channel before every model call so the user preempts multi-second work instantly.
+fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<()>) -> Outcome {
+    let background = mode == Mode::Background;
+    tx.send(Cmd::Status { working: true, background }).ok();
     let mut thoughts = 0;
+    let mut acted = false;
     let mut said = false;
+    let mut preempted = false;
     for _ in 0..MAX_STEPS {
+        if background && wake.try_recv().is_ok() {
+            preempted = true;
+            break;
+        }
         let ctx = perceive(tx);
         // Deterministic nudge: if the user just handed us a data-file path and nothing
         // is mounted, insist the model call read_source (small models otherwise stall).
-        let mut nudge = path_nudge(&ctx).unwrap_or_default();
+        let nudge = if background {
+            BACKGROUND_BRIEF.to_string()
+        } else {
+            path_nudge(&ctx).unwrap_or_default()
+        };
         let content = match call_model(model, &ctx, &nudge) {
             Ok(c) => c,
             Err(e) => {
-                emit(tx, &say_json(&format!("(I couldn't reach my local model — {e}.)")));
-                said = true;
+                // in the background, a dead model just backs the loop off; in the
+                // foreground the user is waiting and deserves the error.
+                if !background {
+                    emit(tx, &say_json(&format!("(I couldn't reach my local model — {e}.)")));
+                    said = true;
+                }
                 break;
             }
         };
-        let tool = extract_json(&content).unwrap_or_else(|| say_json(content.trim()));
+        let tool = extract_json(&content).unwrap_or_else(|| {
+            if background { IDLE_TOOL.to_string() } else { say_json(content.trim()) }
+        });
         let name = tool_name(&tool);
-        eprintln!("[agent] {name}: {}", preview(&tool));
+        eprintln!("[agent{}] {name}: {}", if background { "·bg" } else { "" }, preview(&tool));
+        if name == "idle" {
+            break; // nothing worth doing — not forwarded, just paces the loop
+        }
         if name == "think" {
             thoughts += 1;
             if thoughts > 1 {
                 continue; // don't spin on thinking; re-prompt for an action
             }
+        } else {
+            acted = true;
         }
         emit(tx, &tool);
         // A turn ends when the agent addresses the user.
@@ -107,14 +190,23 @@ fn run_turn(tx: &Sender<Cmd>, model: &str) {
             said = true;
             break;
         }
-        let _ = &mut nudge;
     }
-    // guarantee every turn ends with something for the user (never silent)
-    if !said {
+    // a FOREGROUND turn always ends with something for the user (never silent);
+    // background turns are allowed to finish quietly — their trace is the activity log.
+    if !background && !said {
         emit(tx, &say_json("What would you like to do next?"));
     }
-    tx.send(Cmd::Status(false)).ok();
+    tx.send(Cmd::Status { working: false, background }).ok();
+    if preempted {
+        Outcome::Preempted
+    } else if acted || said {
+        Outcome::Acted
+    } else {
+        Outcome::Idled
+    }
 }
+
+const IDLE_TOOL: &str = r#"{"tool":"idle","args":{}}"#;
 
 /// If the last user message carries a data-file path and no source is mounted yet,
 /// return a hard instruction to mount it — coaxing a small local model past the stall.

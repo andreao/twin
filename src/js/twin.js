@@ -11,18 +11,35 @@
 const T = (() => {
   const G = new Graph('twin');
 
-  // Recorded streams (all in the event log):
-  //   feed    — the conversation/activity
-  //   profile — durable facts about the user
-  //   src:*   — mounted/materialized data sources (created on demand)
+  // Recorded streams — PURE EVENT SOURCING (§8): every one is an append-only stream
+  // in the ONE graph event log.  `input` is the system of record for the user: every
+  // raw UI event lands there verbatim, and everything else about the user (feed items,
+  // inferred goals, renders) is DERIVED from it with `input#<seq>` lineage.
+  //   input    — the user's raw actions, exactly as they arrived (stamped at the boundary)
+  //   feed     — the conversation (user items are derived from input)
+  //   profile  — durable facts about the user (recorded by the agent, incl. inferred goals)
+  //   agenda   — the agent's own to-do list ({id,text,status}; status changes are new events)
+  //   activity — the agent's background work log
+  //   findings — data issues / insights the agent discovered
+  //   lenses   — lenses the agent authored (name + source + code = full lineage)
+  //   src:*    — mounted/materialized data sources (created on demand)
+  const inputSrc = G.source('input', false);
   const feedSrc = G.source('feed', false);
   const profileSrc = G.source('profile', false);
   const skillsSrc = G.source('skills', false);
+  const agendaSrc = G.source('agenda', false);
+  const activitySrc = G.source('activity', false);
+  const findingsSrc = G.source('findings', false);
+  const lensesSrc = G.source('lenses', false);
 
   const feed = new Feed('feed-root');
   const profile = new ProfilePanel('profile-root');
   const sourcesPanel = new SourcesPanel('sources-root');
   const skillsPanel = new SkillsPanel('skills-root');
+  const agendaPanel = new AgendaPanel('agenda-root');
+  const activityPanel = new ActivityPanel('activity-root');
+  const findingsPanel = new FindingsPanel('findings-root');
+  const lensPanel = new LensPanel('lenses-root');
 
   G.observe(feedSrc, (delta) => {
     for (const [row] of delta.entries()) feed.append(row.asObject());
@@ -37,6 +54,45 @@ const T = (() => {
     }
   });
 
+  // Folds over the event streams (the panels above render them; these Maps hold the
+  // same folded state for perception + tool logic — last event per key wins).
+  const agenda = new Map();    // id -> { text, status }
+  const findings = new Map();  // id -> { severity, text, source }
+  const lenses = new Map();    // name -> { source, code, rowcount, ver }
+  const activityTail = [];     // recent activity notes (perception window)
+  const userActions = [];      // recent raw user actions, described (perception window)
+
+  G.observe(agendaSrc, (delta) => {
+    for (const [row] of delta.entries()) {
+      const r = row.asObject();
+      const text = r.text || (agenda.get(r.id) || {}).text || '';
+      agenda.set(r.id, { text, status: r.status });
+      agendaPanel.set(r.id, text, r.status);
+    }
+  });
+  G.observe(activitySrc, (delta) => {
+    for (const [row] of delta.entries()) {
+      const r = row.asObject();
+      activityTail.push(r.text);
+      if (activityTail.length > 12) activityTail.shift();
+      activityPanel.add(r.seq, r.text);
+    }
+  });
+  G.observe(findingsSrc, (delta) => {
+    for (const [row] of delta.entries()) {
+      const r = row.asObject();
+      findings.set(r.id, { severity: r.severity, text: r.text, source: r.source });
+      findingsPanel.set(r.id, r.severity, r.text, r.source);
+    }
+  });
+  G.observe(lensesSrc, (delta) => {
+    for (const [row] of delta.entries()) {
+      const r = row.asObject();
+      lenses.set(r.name, { source: r.source, code: r.code, rowcount: r.rowcount, ver: r.ver });
+      lensPanel.set(r.name, r.source, r.code, r.rowcount);
+    }
+  });
+
   const sourceIds = new Map(); // name -> graph source node id
   const sources = new Map();   // name -> { residence, locator, rowcount, schema, sample }
   const skills = new Map();    // name -> { description, files } — capabilities the agent has
@@ -44,11 +100,13 @@ const T = (() => {
   let seq = 0;
   const prov = (author) => ({ author, origin: 'agent', note: '' });
 
-  function append(kind, payload) {
+  // `note` marks a DERIVED item and names the raw event it came from (e.g. "input#7"),
+  // so every feed item traces back to the event that caused it.
+  function append(kind, payload, note) {
     seq += 1;
     const s = seq;
     G.submit(feedSrc, ZSet.fromRows([rec(Object.assign({ seq: s, kind }, payload))]),
-      prov(kind === 'user' ? 'user' : 'agent'));
+      { author: kind === 'user' ? 'user' : 'agent', origin: note ? 'derived' : 'agent', note: note || '' });
     return s; // the feed seq — used to address a rendered view's body card
   }
   function recordProfile(field, value) {
@@ -406,22 +464,104 @@ const T = (() => {
     G.submit(skillsSrc, ZSet.fromRows([rec({ name, title, description: meta.description || '' })]), prov('core'));
   }
 
-  // The agent inspects a source: compute quick stats over the materialized rows and
-  // surface them as a system note the agent perceives next turn (its analysis loop).
+  // ---- the agent's working state (agenda / activity / findings) ---------------
+  // All pure event sourcing: each call appends an event; the observers above fold it
+  // into the panels and the perception state.  Nothing is mutated in place.
+  let agendaSeq = 0;
+  function addAgenda(text) {
+    agendaSeq += 1;
+    G.submit(agendaSrc, ZSet.fromRows([rec({ id: agendaSeq, text: String(text), status: 'open' })]), prov('agent'));
+  }
+  // Resolve a task by id or text fragment and append a status-change event for it.
+  function setAgenda(ref, status) {
+    const q = String(ref).trim().toLowerCase();
+    if (!q) return false;
+    let hit = null;
+    for (const [id, a] of agenda) {
+      if (String(id) === q) { hit = id; break; }
+      if (hit === null && a.status !== 'done' && a.text.toLowerCase().includes(q)) hit = id;
+    }
+    if (hit === null) return false;
+    G.submit(agendaSrc, ZSet.fromRows([rec({ id: hit, text: agenda.get(hit).text, status })]), prov('agent'));
+    return true;
+  }
+  let actSeq = 0;
+  function logActivity(text) {
+    actSeq += 1;
+    G.submit(activitySrc, ZSet.fromRows([rec({ seq: actSeq, text: String(text) })]), prov('agent'));
+  }
+  let findingSeq = 0;
+  function addFinding(a) {
+    const text = String(a.text || a.description || '').trim();
+    if (!text) return;
+    for (const f of findings.values()) if (f.text === text) return; // already on the board
+    findingSeq += 1;
+    const sev = ['info', 'warn', 'critical'].includes(a.severity) ? a.severity : 'info';
+    G.submit(findingsSrc, ZSet.fromRows([rec({ id: findingSeq, severity: sev, text, source: String(a.source || '') })]), prov('agent'));
+    logActivity(`finding (${sev}): ${text}`);
+  }
+
+  // The agent AUTHORS a lens (§4.1: lenses are data): pure JavaScript over a source's
+  // rows, evaluated in-graph.  Purity is enforced by capability-absence — this isolate
+  // has no IO of any kind, so lens code can compute but never effect.  The result
+  // becomes a derived source `lens:<name>` (browsable/showable like any source) whose
+  // full lineage — source, code, author — is recorded and shown on its card.
+  function makeLens(a) {
+    const srcName = String(a.source || '');
+    const name = String(a.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'unnamed';
+    const id = sourceIds.get(srcName);
+    if (id === undefined) { logActivity(`lens “${name}”: no source “${srcName}” — mount it first`); return; }
+    const code = String(a.code || '');
+    let out;
+    try { out = new Function('rows', code)(G.stateOf(id).support().map((r) => r.asObject())); }
+    catch (err) { logActivity(`lens “${name}” failed: ${err.message}`); return; }
+    if (!Array.isArray(out)) { logActivity(`lens “${name}”: code must return an array of rows`); return; }
+    out = out.slice(0, 5000).map((r) => (r && typeof r === 'object' ? r : { value: r }));
+    const lname = 'lens:' + name;
+    // re-authoring the same name = a NEW version; old versions stay in the event log
+    const ver = ((lenses.get(name) || {}).ver || 0) + 1;
+    const lid = G.source(`src:${lname}#${ver}`, true);
+    sourceIds.set(lname, lid);
+    G.submit(lid, ZSet.fromRows(out.map((r) => rec(r))), { author: 'agent', origin: 'lens', note: `from ${srcName} v${ver}` });
+    const schema = inferSchema(out);
+    sources.set(lname, {
+      kind: 'table', residence: 'derived', locator: `lens(${srcName})`,
+      rowcount: out.length, materialized: out.length, schema, sample: out.slice(0, 3),
+    });
+    G.submit(lensesSrc, ZSet.fromRows([rec({ name, source: srcName, code, rowcount: out.length, ver })]), prov('agent'));
+    logActivity(`authored lens “${name}” — ${out.length} rows from ${srcName}`);
+    const sq = append('view', { text: a.title || `New lens “${name}” — ${out.length} rows derived from ${srcName}`, view: 'table' });
+    renderTableInto(`item:${sq}:body`, `v${sq}`, out.slice(0, 8), Object.keys(schema));
+  }
+
+  // The agent inspects a source: quick stats + data-quality signals (empties,
+  // duplicate keys) over the materialized rows.  The result lands in the activity
+  // log, which the agent perceives next turn — its analysis loop.
   function inspectSource(src) {
     const id = sourceIds.get(src);
-    if (id === undefined) { append('system', { text: `No source “${src}” to inspect.` }); return; }
+    if (id === undefined) { logActivity(`no source “${src}” to inspect`); return; }
     const rows = G.stateOf(id).support().map((r) => r.asObject());
     const cols = Object.keys((sources.get(src) || {}).schema || {});
-    const stats = cols.map((c) => {
+    const stats = [];
+    cols.forEach((c) => {
       const nums = rows.map((r) => Number(r[c])).filter((n) => Number.isFinite(n));
       if (nums.length > rows.length * 0.5 && nums.length) {
-        const min = Math.min(...nums), max = Math.max(...nums), mean = nums.reduce((s, x) => s + x, 0) / nums.length;
-        return `${c} ${min.toFixed(1)}–${max.toFixed(1)} (avg ${mean.toFixed(1)})`;
+        stats.push(`${c} ${Math.min(...nums).toFixed(1)}–${Math.max(...nums).toFixed(1)}`);
       }
-      return null;
-    }).filter(Boolean);
-    append('system', { text: `Inspected “${src}”: ${rows.length} rows, ${cols.length} columns.${stats.length ? ' Numeric ranges — ' + stats.join('; ') + '.' : ''}` });
+    });
+    const issues = [];
+    cols.forEach((c) => {
+      const n = rows.filter((r) => r[c] == null || r[c] === '').length;
+      if (n) issues.push(`${c}: ${n} empty`);
+    });
+    if (cols.length) {
+      const c0 = cols[0]; const seen = new Set(); let dup = 0;
+      rows.forEach((r) => { const v = String(r[c0]); if (seen.has(v)) dup += 1; else seen.add(v); });
+      if (dup) issues.push(`${c0}: ${dup} duplicates`);
+    }
+    logActivity(`inspected “${src}”: ${rows.length} rows, ${cols.length} cols`
+      + (stats.length ? ` · ranges ${stats.slice(0, 4).join('; ')}` : '')
+      + (issues.length ? ` · gaps ${issues.slice(0, 5).join('; ')}` : ' · no empties'));
   }
 
   // ---- inline rich views (§11.6, §11.16): the AGENT communicates through visuals ----
@@ -531,23 +671,59 @@ const T = (() => {
       case 'record_profile': recordProfile(a.field, a.value); break;
       case 'inspect': inspectSource(a.source); break;
       case 'show': doShow(a); break;
+      case 'plan': {
+        const items = Array.isArray(a.items) ? a.items : [a.text || a.item];
+        items.filter(Boolean).forEach((t) => addAgenda(t));
+        break;
+      }
+      case 'work':
+        if (a.task != null && a.task !== '') setAgenda(a.task, 'active');
+        logActivity(String(a.text || a.task || 'working'));
+        break;
+      case 'done': {
+        const ref = a.task != null ? a.task : a.text;
+        if (ref != null && setAgenda(ref, 'done')) logActivity(`done: ${ref}`);
+        break;
+      }
+      case 'finding': addFinding(a); break;
+      case 'make_lens': makeLens(a); break;
+      case 'idle': break; // "nothing worth doing" — pacing lives in the Rust harness
       // read_source is effectful: handled at the Rust boundary, which calls mountSource.
       default: if (a.text) append('agent', { text: String(a.text) }); break;
     }
   }
 
-  // ---- backward UI events (§11.4): the user steering -------------------------
+  // ---- backward UI events (§11.4): captured RAW, then derived ------------------
+  // Everything the user does is recorded in its RAWEST form first: the event object
+  // lands verbatim in the `input` stream (timestamped at the Rust boundary — the wall
+  // clock is a boundary fact, never computed in-graph).  Only after that commit do we
+  // derive: feed items, view renders, and the agent's read of the user's behavior all
+  // come FROM the raw event, each carrying `input#<seq>` lineage.  (Derivations run
+  // after the commit returns, not nested inside its propagation.)
+  let inputSeq = 0;
   function event(json) {
     let e; try { e = JSON.parse(json); } catch (_) { return; }
+    if (!e || typeof e.type !== 'string') return;
+    inputSeq += 1;
+    const raw = Object.assign({ seq: inputSeq, ts: 0 }, e);
+    G.submit(inputSrc, ZSet.fromRows([rec(raw)]), { author: 'user', origin: 'ui', note: 'raw' });
+    deriveFromInput(raw);
+  }
+
+  function deriveFromInput(e) {
+    const note = `input#${e.seq}`;
+    // the agent perceives the user's raw behavior — it derives goals from what they DO
+    userActions.push(describeAction(e));
+    if (userActions.length > 12) userActions.shift();
     if (e.type === 'user_message' && e.text) {
-      append('user', { text: String(e.text) });
+      append('user', { text: String(e.text) }, note);
     } else if (e.type === 'choose' && e.target) {
-      const m = /^option:(\d+):(\d+)$/.exec(e.target);
+      const m = /^option:(\d+):(\d+)$/.exec(String(e.target));
       if (!m) return;
       const s = Number(m[1]), idx = Number(m[2]);
       const q = feed.items.find((it) => it.seq === s);
       const opt = q && q.options ? q.options[idx] : null;
-      append('user', { text: opt != null ? String(opt) : `option ${idx + 1}` });
+      append('user', { text: opt != null ? String(opt) : `option ${idx + 1}` }, note);
     } else if (e.type === 'open_source' && e.name) {
       openSource(String(e.name), e.mode);
     } else if (e.type === 'open_document' && e.name) {
@@ -559,16 +735,45 @@ const T = (() => {
     } else if (e.type === 'watch') {
       watch();
     }
+    // 'fetch' renders via the host boundary (twin_fetch); its raw capture above is all.
+  }
+
+  function describeAction(e) {
+    switch (e.type) {
+      case 'user_message': return 'sent a message';
+      case 'choose': return 'answered a question card';
+      case 'open_source': return `browsed source “${e.name}”${e.mode ? ' as ' + e.mode : ''}`;
+      case 'open_document': return `viewed document “${e.name}”`;
+      case 'open_asset': return `opened the dashboard of asset ${e.id}`;
+      case 'search': return e.query ? `searched for “${e.query}”` : 'cleared the search';
+      case 'watch': return 'opened the Watch board';
+      case 'fetch': return `charted series ${e.label || e.id}`;
+      default: return String(e.type);
+    }
   }
 
   // ---- what the agent perceives (§12.3) --------------------------------------
+  // Everything here is a fold over the event streams above — including userActions,
+  // the user's RAW behavior, from which the agent derives goals and intent.
   function perceive() {
     const recent = feed.items.slice(-40).map((it) => ({ kind: it.kind, text: it.text, options: it.options }));
     const srcs = [...sources].map(([name, s]) => ({
       name, residence: s.residence, rowcount: s.rowcount, schema: s.schema, sample: s.sample,
     }));
     const sks = [...skills].map(([name, s]) => ({ name, description: s.description }));
-    return JSON.stringify({ profile: profile.asObject(), sources: srcs, skills: sks, feed: recent });
+    const ag = [...agenda].map(([id, a]) => ({ id, text: a.text, status: a.status }));
+    return JSON.stringify({
+      profile: profile.asObject(),
+      sources: srcs,
+      skills: sks,
+      agenda: ag.filter((a) => a.status !== 'done').slice(0, 12),
+      agendaDone: ag.filter((a) => a.status === 'done').length,
+      findings: [...findings.values()].slice(-8).map((f) => ({ severity: f.severity, text: f.text })),
+      lenses: [...lenses].map(([name, l]) => ({ name: 'lens:' + name, source: l.source, rowcount: l.rowcount })),
+      activity: activityTail.slice(-8),
+      userActions: userActions.slice(-10),
+      feed: recent,
+    });
   }
 
   return {

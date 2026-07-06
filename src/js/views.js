@@ -125,6 +125,121 @@ class SourcesPanel {
   }
 }
 
+// ---- the agent-at-work surfaces ---------------------------------------------
+// Agenda, activity, findings, and agent-authored lenses are all PURE EVENT SOURCING
+// (§8): each is an append-only stream in the one graph, and these panels are folds
+// over those streams (last event per key wins in the DOM; the full history stays in
+// the event log).  They exist so the human can see what the agent is doing.
+
+// The agent's own to-do list.  Events: { id, text, status } — a status change is a
+// new event for the same id, folded here into the row's chip.
+class AgendaPanel {
+  constructor(root = 'agenda-root') {
+    this.root = root;
+    this.ids = new Map();
+  }
+  _emit(m) { TWIN_MUT.push(m); }
+
+  set(id, text, status) {
+    const rk = `ag:${id}`;
+    if (this.ids.has(id)) {
+      this.ids.set(id, status);
+      this._emit({ op: 'setAttr', key: rk, name: 'class', value: `ag-row ${status}` });
+      this._emit({ op: 'setText', key: `${rk}:s`, text: status });
+      if (text) this._emit({ op: 'setText', key: `${rk}:t`, text });
+      return;
+    }
+    const i = this.ids.size;
+    this.ids.set(id, status);
+    this._emit({ op: 'create', key: rk, tag: 'div', parent: this.root, index: i });
+    this._emit({ op: 'setAttr', key: rk, name: 'class', value: `ag-row ${status}` });
+    this._emit({ op: 'create', key: `${rk}:t`, tag: 'div', parent: rk, index: 0 });
+    this._emit({ op: 'setAttr', key: `${rk}:t`, name: 'class', value: 'ag-t' });
+    this._emit({ op: 'setText', key: `${rk}:t`, text: text || '' });
+    this._emit({ op: 'create', key: `${rk}:s`, tag: 'span', parent: rk, index: 1 });
+    this._emit({ op: 'setAttr', key: `${rk}:s`, name: 'class', value: 'ag-s' });
+    this._emit({ op: 'setText', key: `${rk}:s`, text: status });
+  }
+}
+
+// The agent's background work log — newest note on top, display bounded (the full
+// log stays in the graph's event log).
+class ActivityPanel {
+  constructor(root = 'activity-root', cap = 30) {
+    this.root = root;
+    this.cap = cap;
+    this.keys = [];
+  }
+  _emit(m) { TWIN_MUT.push(m); }
+
+  add(seq, text) {
+    const k = `act:${seq}`;
+    this._emit({ op: 'create', key: k, tag: 'div', parent: this.root, index: 0 });
+    this._emit({ op: 'setAttr', key: k, name: 'class', value: 'act-row' });
+    this._emit({ op: 'setText', key: k, text });
+    this.keys.push(k);
+    if (this.keys.length > this.cap) this._emit({ op: 'remove', key: this.keys.shift() });
+  }
+}
+
+// Data issues / insights the agent discovered, as severity-tinted cards.
+class FindingsPanel {
+  constructor(root = 'findings-root') {
+    this.root = root;
+    this.ids = new Set();
+  }
+  _emit(m) { TWIN_MUT.push(m); }
+
+  set(id, severity, text, source) {
+    const rk = `fnd:${id}`;
+    if (this.ids.has(id)) {
+      this._emit({ op: 'setText', key: `${rk}:t`, text });
+      return;
+    }
+    this.ids.add(id);
+    this._emit({ op: 'create', key: rk, tag: 'div', parent: this.root, index: 0 });
+    this._emit({ op: 'setAttr', key: rk, name: 'class', value: `fnd sev-${severity}` });
+    this._emit({ op: 'create', key: `${rk}:t`, tag: 'div', parent: rk, index: 0 });
+    this._emit({ op: 'setText', key: `${rk}:t`, text });
+    this._emit({ op: 'create', key: `${rk}:m`, tag: 'div', parent: rk, index: 1 });
+    this._emit({ op: 'setAttr', key: `${rk}:m`, name: 'class', value: 'fnd-m' });
+    this._emit({ op: 'setText', key: `${rk}:m`, text: source ? `${severity} · in ${source} · found by the agent` : `${severity} · found by the agent` });
+  }
+}
+
+// Agent-authored lenses (§4.1: lenses are data) — the Artifacts page.  Each card
+// carries the lens's full lineage: which source, what code, who authored it.
+class LensPanel {
+  constructor(root = 'lenses-root') {
+    this.root = root;
+    this.names = new Map();
+  }
+  _emit(m) { TWIN_MUT.push(m); }
+
+  set(name, source, code, rowcount) {
+    const rk = `ln:${name}`;
+    const meta = `derived from ${source} · ${rowcount} rows · authored by the agent`;
+    if (this.names.has(name)) {
+      this._emit({ op: 'setText', key: `${rk}:d`, text: meta });
+      this._emit({ op: 'setText', key: `${rk}:c`, text: code });
+      return;
+    }
+    const i = this.names.size;
+    this.names.set(name, true);
+    this._emit({ op: 'create', key: rk, tag: 'div', parent: this.root, index: i });
+    this._emit({ op: 'setAttr', key: rk, name: 'class', value: 'src-row lens-card' });
+    this._emit({ op: 'create', key: `${rk}:n`, tag: 'div', parent: rk, index: 0 });
+    this._emit({ op: 'setAttr', key: `${rk}:n`, name: 'class', value: 'src-n' });
+    this._emit({ op: 'setText', key: `${rk}:n`, text: `lens:${name}` });
+    this._emit({ op: 'create', key: `${rk}:d`, tag: 'div', parent: rk, index: 1 });
+    this._emit({ op: 'setAttr', key: `${rk}:d`, name: 'class', value: 'src-d' });
+    this._emit({ op: 'setText', key: `${rk}:d`, text: meta });
+    this._emit({ op: 'create', key: `${rk}:c`, tag: 'div', parent: rk, index: 2 });
+    this._emit({ op: 'setAttr', key: `${rk}:c`, name: 'class', value: 'lens-code' });
+    this._emit({ op: 'setText', key: `${rk}:c`, text: code });
+  }
+}
+
 // The installed skills (capabilities the agent can draw on), seeded by the core
 // skills-loader (§4.1) from the static skills/ directory.
 class SkillsPanel {

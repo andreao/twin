@@ -219,10 +219,82 @@ fn hierarchy_rolls_up_links_and_agent_can_inspect() {
     let tree = g.twin_from(0);
     assert!(tree.contains("tn:1:dot") && tree.contains("tn:1:b"), "no rollup badge on parent");
     assert!(tree.contains("1 sensors"), "sensor not rolled up: check badge text");
-    // agent inspect tool computes stats
+    // agent inspect tool computes stats — the result lands in its activity log
     g.twin_agent_tool(r#"{"tool":"inspect","args":{"source":"timeseries"}}"#);
-    let feed = g.twin_from(0);
-    assert!(feed.contains("Inspected") && feed.contains("timeseries"), "inspect did not run");
+    let log = g.twin_from(0);
+    assert!(log.contains("inspected") && log.contains("timeseries"), "inspect did not run");
+    assert!(log.contains("act:"), "inspect result not in the activity log");
+}
+
+#[test]
+fn user_input_is_captured_raw_and_derived_with_lineage() {
+    let mut g = JsGraph::new_twin();
+    // pure event sourcing (§8): the user's actions land verbatim in the `input`
+    // stream (ts stamped at the boundary); feed items etc. are DERIVED from them.
+    g.twin_event(r#"{"type":"search","query":"pump","ts":1700000000000}"#);
+    g.twin_event(r#"{"type":"open_source","name":"assets","ts":1700000000001}"#);
+    g.twin_event(r#"{"type":"user_message","text":"hello twin","ts":1700000000002}"#);
+    // the derived feed item renders…
+    let muts = g.twin_from(0);
+    assert!(muts.contains("hello twin"), "derived feed item missing: {muts}");
+    // …and the agent perceives the user's raw behavior, to derive goals from
+    let seen = g.twin_perceive();
+    assert!(seen.contains("userActions"), "no raw-action stream in perception");
+    assert!(seen.contains("pump"), "search action not perceived: {seen}");
+    assert!(seen.contains("sent a message"), "message action not perceived: {seen}");
+}
+
+#[test]
+fn agent_keeps_an_agenda_and_activity_log() {
+    let mut g = JsGraph::new_twin();
+    g.twin_agent_tool(r#"{"tool":"plan","args":{"items":["Profile the turbines source","Look for data gaps"]}}"#);
+    g.twin_agent_tool(r#"{"tool":"work","args":{"task":"profile","text":"profiling turbines: checking ranges"}}"#);
+    let muts = g.twin_from(0);
+    assert!(muts.contains("ag:1") && muts.contains("Profile the turbines source"), "agenda row missing");
+    assert!(muts.contains("ag-row active"), "task not marked active");
+    assert!(muts.contains("act:") && muts.contains("profiling turbines"), "activity note missing");
+    // status changes are new EVENTS folded onto the same row (event sourcing)
+    g.twin_agent_tool(r#"{"tool":"done","args":{"task":"profile"}}"#);
+    assert!(g.twin_from(0).contains("ag-row done"), "task not marked done");
+    let seen = g.twin_perceive();
+    assert!(seen.contains("Look for data gaps"), "agenda not perceived: {seen}");
+    assert!(seen.contains("\"agendaDone\":1"), "done count not perceived: {seen}");
+}
+
+#[test]
+fn agent_records_findings_on_the_board() {
+    let mut g = JsGraph::new_twin();
+    g.twin_agent_tool(r#"{"tool":"finding","args":{"severity":"warn","text":"3 turbines have no vibration sensor","source":"turbines"}}"#);
+    let muts = g.twin_from(0);
+    assert!(muts.contains("fnd:1") && muts.contains("sev-warn"), "finding card missing: {muts}");
+    assert!(muts.contains("no vibration sensor"), "finding text missing");
+    // filing the same finding twice is a no-op
+    g.twin_agent_tool(r#"{"tool":"finding","args":{"severity":"warn","text":"3 turbines have no vibration sensor"}}"#);
+    assert!(!g.twin_from(0).contains("fnd:2"), "duplicate finding filed twice");
+    assert!(g.twin_perceive().contains("no vibration sensor"), "finding not perceived");
+}
+
+#[test]
+fn agent_authors_a_lens_with_lineage() {
+    let path = write_temp_csv(); // WT-01 62.4 / WT-02 71.9 / WT-03 83.2 gearbox_temp
+    let mut g = JsGraph::new_twin();
+    g.twin_read_source("turbines", &path, "mounted");
+    g.twin_agent_tool(
+        r#"{"tool":"make_lens","args":{"name":"Hot Gearboxes","source":"turbines","code":"return rows.filter(r => Number(r.gearbox_temp) > 70)","title":"Turbines running hot"}}"#,
+    );
+    let muts = g.twin_from(0);
+    // the artifact card carries the lens's lineage: source, code, author
+    assert!(muts.contains("ln:hot-gearboxes"), "no lens card in artifacts: {muts}");
+    assert!(muts.contains("return rows.filter"), "lens code (lineage) not on the card");
+    assert!(muts.contains("derived from turbines"), "lens source (lineage) not on the card");
+    // the derived rows render inline as a view card; the filtered-out row does not
+    assert!(muts.contains("WT-02") && muts.contains("WT-03"), "derived rows missing from inline view");
+    assert!(!muts.contains("WT-01"), "lens filter not applied");
+    // the lens is a live derived source of its own — browsable like any source
+    g.twin_event(r#"{"type":"open_source","name":"lens:hot-gearboxes"}"#);
+    assert!(g.twin_from(0).contains("exp:tbl"), "lens not browsable as a table");
+    let seen = g.twin_perceive();
+    assert!(seen.contains("lens:hot-gearboxes"), "lens not perceived: {seen}");
 }
 
 #[test]
