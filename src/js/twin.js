@@ -86,8 +86,9 @@ const T = (() => {
   G.observe(findingsSrc, (delta) => {
     for (const [row] of delta.entries()) {
       const r = row.asObject();
-      findings.set(r.id, { severity: r.severity, text: r.text, source: r.source });
-      findingsPanel.set(r.id, r.severity, r.text, r.source);
+      const status = r.status || 'open';
+      findings.set(r.id, { severity: r.severity, text: r.text, source: r.source, status });
+      findingsPanel.set(r.id, r.severity, r.text, r.source, status);
     }
   });
   const srcTitle = (n) => (sources.get(n) || {}).title || n;
@@ -599,11 +600,55 @@ const T = (() => {
     const sev = ['info', 'warn', 'critical'].includes(a.severity) ? a.severity : 'info';
     const src = String(a.source || '');
     G.submit(findingsSrc, ZSet.fromRows([rec({ id: findingSeq, severity: sev, text, source: src })]), prov('agent'));
-    // findings are DONE work — they read as a card in the chat history too
+    // findings are DONE work — they read as a card in the chat history too, and
+    // open into the FINDING itself (severity, evidence, actions), not the raw source
     const sevTitle = sev === 'critical' ? 'Critical issue' : sev === 'warn' ? 'Data issue' : 'Noted';
     workCard(sevTitle, text, src ? `in ${srcTitle(src)}` : '',
-      src && sources.has(src) ? { type: 'open_source', name: src } : null, `sev-${sev}`);
+      { type: 'open_finding', id: findingSeq }, `sev-${sev}`);
     logActivity(`finding (${sev}): ${text}`);
+  }
+
+  // A finding, opened: what's wrong, where (one click to the evidence source), and
+  // what YOU can do about it — investigate / propose a fix (both brief the agent
+  // through the chat) or mark it resolved (an event, folded everywhere).
+  function openFinding(id, panel) {
+    const f = findings.get(Number(id));
+    const V = viewer(panel);
+    if (!f) {
+      V.add('div', 'exp:note', null, 0); V.set('exp:note', 'class', 'explorer-note');
+      V.text('exp:note', `No finding #${id}.`);
+      return;
+    }
+    const sevWord = f.severity === 'critical' ? 'Critical issue' : f.severity === 'warn' ? 'Data issue' : 'Observation';
+    V.add('div', 'fd:sev', null, 0); V.set('fd:sev', 'class', `fd-sev sev-${f.severity}${f.status === 'resolved' ? ' resolved' : ''}`);
+    V.text('fd:sev', f.status === 'resolved' ? `${sevWord} · resolved` : sevWord);
+    V.add('div', 'fd:t', null, 1); V.set('fd:t', 'class', 'fd-text'); V.text('fd:t', f.text);
+    let i = 2;
+    if (f.source && sources.has(f.source)) {
+      V.add('div', 'fd:src', null, i++); V.set('fd:src', 'class', 'fd-src');
+      V.set('fd:src', 'data-name', f.source); V.set('fd:src', 'data-title', srcTitle(f.source));
+      V.text('fd:src', `found in ${srcTitle(f.source)} — open the data`);
+    }
+    V.add('div', 'fd:cta', null, i++); V.set('fd:cta', 'class', 'fd-cta');
+    V.add('button', 'fd:investigate', 'fd:cta', 0); V.set('fd:investigate', 'class', 'fd-btn primary');
+    V.set('fd:investigate', 'data-text', f.text); V.text('fd:investigate', 'Investigate');
+    V.add('button', 'fd:fix', 'fd:cta', 1); V.set('fd:fix', 'class', 'fd-btn');
+    V.set('fd:fix', 'data-text', f.text); V.text('fd:fix', 'Propose a fix');
+    V.add('button', 'fd:resolve', 'fd:cta', 2); V.set('fd:resolve', 'class', 'fd-btn');
+    V.set('fd:resolve', 'data-id', id);
+    V.text('fd:resolve', f.status === 'resolved' ? 'Resolved ✓' : 'Mark resolved');
+    V.add('div', 'fd:hint', null, i++); V.set('fd:hint', 'class', 'explorer-note');
+    V.text('fd:hint', 'Investigate and Propose a fix brief the agent in the chat — it will pick this up and answer there.');
+  }
+
+  // Resolving a finding is an event like everything else; the folds dim it on the
+  // board, in the count, and on re-opened detail views.
+  function resolveFinding(id) {
+    const f = findings.get(Number(id));
+    if (!f || f.status === 'resolved') return;
+    G.submit(findingsSrc, ZSet.fromRows([rec({ id: Number(id), severity: f.severity, text: f.text, source: f.source, status: 'resolved' })]),
+      { author: 'user', origin: 'derived', note: 'resolved' });
+    logActivity(`finding resolved: ${f.text}`);
   }
 
   // The agent AUTHORS a lens (§4.1: lenses are data): pure JavaScript over a source's
@@ -920,6 +965,10 @@ const T = (() => {
       search(String(e.query || ''), e.panel);
     } else if (e.type === 'watch') {
       watch(e.panel);
+    } else if (e.type === 'open_finding') {
+      openFinding(e.id, e.panel);
+    } else if (e.type === 'resolve_finding') {
+      resolveFinding(e.id);
     } else if (e.type === 'star') {
       toggleStar(e);
     }
@@ -973,6 +1022,8 @@ const T = (() => {
       case 'watch': return 'opened the Watch board';
       case 'fetch': return `charted series ${e.label || e.id}`;
       case 'open_board': return 'opened the twin board';
+      case 'open_finding': return `opened finding #${e.id}`;
+      case 'resolve_finding': return `resolved finding #${e.id}`;
       case 'star': return `starred “${e.title || 'a page'}”`;
       default: return String(e.type);
     }

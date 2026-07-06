@@ -303,6 +303,7 @@ fn agent_records_findings_on_the_board() {
     assert!(muts.contains("fnd:1") && muts.contains("sev-warn"), "finding card missing: {muts}");
     assert!(muts.contains("no vibration sensor"), "finding text missing");
     assert!(muts.contains("Data issue"), "finding not surfaced as a chat card");
+    assert!(muts.contains("open_finding"), "chat card does not open the finding itself");
     // filing the same finding twice is a no-op
     g.twin_agent_tool(r#"{"tool":"finding","args":{"severity":"warn","text":"3 turbines have no vibration sensor"}}"#);
     assert!(!g.twin_from(0).contains("fnd:2"), "duplicate finding filed twice");
@@ -382,6 +383,25 @@ fn describe_gives_sources_human_titles() {
     assert!(muts.contains("Turbine fleet"), "title not applied to the tile");
     assert!(muts.contains("All wind turbines"), "description not applied to the tile");
     assert!(g.twin_perceive().contains("Turbine fleet"), "title not perceived");
+}
+
+#[test]
+fn a_finding_opens_with_evidence_link_and_actions() {
+    let path = write_temp_csv();
+    let mut g = JsGraph::new_twin();
+    g.twin_read_source("turbines", &path, "mounted");
+    g.twin_agent_tool(r#"{"tool":"finding","args":{"severity":"warn","text":"2 of 3 turbines run gearboxes above 70°C","source":"turbines"}}"#);
+    // opening the finding shows the ISSUE (not the raw table) + calls to action
+    g.twin_event(r#"{"type":"open_finding","id":1,"panel":0}"#);
+    let d = g.twin_from(0);
+    assert!(d.contains("fd-text") && d.contains("above 70"), "finding text missing: {d}");
+    assert!(d.contains("found in turbines"), "no evidence link to the source");
+    assert!(d.contains("fd:investigate") && d.contains("fd:fix") && d.contains("fd:resolve"), "calls to action missing");
+    // resolving is an event: the board card dims and the count reflects it
+    g.twin_event(r#"{"type":"resolve_finding","id":1}"#);
+    let r = g.twin_from(0);
+    assert!(r.contains("fnd sev-warn resolved"), "board card not marked resolved");
+    assert!(r.contains("(1 resolved)"), "tile count not updated: {r}");
 }
 
 #[test]

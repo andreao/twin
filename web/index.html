@@ -68,9 +68,28 @@
   .card-sub { color: var(--muted); font-size: 12px; margin-top: 3px; line-height: 1.5; }
   .card-sub:empty, .card-meta:empty { display: none; }
   .card-meta { color: var(--muted); font-size: 11.5px; margin-top: 4px; }
-  .feed-item.card.sev-info { border-left-color: var(--accent); }
-  .feed-item.card.sev-warn { border-left-color: #d9902a; }
-  .feed-item.card.sev-critical { border-left-color: #c0392b; }
+  /* severity is a quiet dot before the title — no loud borders */
+  .feed-item.card.sev-info .card-title::before { content: "● "; color: var(--accent); font-size: 9px; vertical-align: 2px; }
+  .feed-item.card.sev-warn .card-title::before { content: "● "; color: #d9902a; font-size: 9px; vertical-align: 2px; }
+  .feed-item.card.sev-critical .card-title::before { content: "● "; color: #c0392b; font-size: 9px; vertical-align: 2px; }
+
+  /* a finding, opened: severity chip · the issue · where · what you can do */
+  .fd-sev { display: inline-block; font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; font-weight: 600; padding: 3px 10px; border-radius: 99px; margin-bottom: 12px; }
+  .fd-sev.sev-info { background: var(--accent-soft); color: #7a4a38; }
+  .fd-sev.sev-warn { background: #f7ead4; color: #8a5a14; }
+  .fd-sev.sev-critical { background: #f7dcd6; color: #8a2e20; }
+  .fd-sev.resolved { background: #e7efe7; color: #3f6b48; }
+  .fd-text { font-size: 16px; font-weight: 550; line-height: 1.5; max-width: 56ch; }
+  .fd-src { color: #7a4a38; font-size: 13px; margin-top: 12px; cursor: pointer; }
+  .fd-src:hover { color: var(--accent); }
+  .fd-cta { display: flex; gap: 8px; margin-top: 20px; }
+  .fd-btn { border: 1px solid var(--line); background: var(--panel); border-radius: 9px; padding: 7px 15px; font: inherit; font-size: 13px; color: var(--ink); cursor: pointer; transition: border-color .12s, background .12s; }
+  .fd-btn:hover { border-color: var(--accent); background: var(--accent-soft); }
+  .fd-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .fd-btn.primary:hover { opacity: .9; }
+  .fnd { cursor: pointer; }
+  .fnd.resolved { opacity: .5; }
+  .fnd.resolved > div:first-child { text-decoration: line-through; }
   .view-body { min-height: 0; }
   .view-scroll { overflow-x: auto; max-height: 44vh; overflow-y: auto; }
   .feed-item.view .doc-frame { width: 100%; height: 44vh; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
@@ -138,10 +157,11 @@
   .code-toggle { margin-left: 8px; border: 1px solid var(--line); background: var(--panel); border-radius: 7px; padding: 1px 9px; font-family: ui-monospace, "SF Mono", monospace; font-size: 10.5px; color: var(--muted); cursor: pointer; }
   .code-toggle:hover { border-color: var(--accent); color: var(--accent); }
   .fnd-list { max-height: 300px; overflow-y: auto; }
-  .fnd { border: 1px solid var(--line); border-left: 3px solid var(--line); border-radius: 9px; padding: 8px 10px; margin: 6px 0; font-size: 12.5px; background: var(--bg); }
-  .fnd.sev-info { border-left-color: var(--accent); }
-  .fnd.sev-warn { border-left-color: #d9902a; }
-  .fnd.sev-critical { border-left-color: #c0392b; }
+  .fnd { border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; margin: 6px 0; font-size: 12.5px; background: var(--bg); }
+  .fnd:hover { border-color: var(--accent); }
+  .fnd.sev-info > div:first-child::before { content: "● "; color: var(--accent); font-size: 8px; vertical-align: 2px; }
+  .fnd.sev-warn > div:first-child::before { content: "● "; color: #d9902a; font-size: 8px; vertical-align: 2px; }
+  .fnd.sev-critical > div:first-child::before { content: "● "; color: #c0392b; font-size: 8px; vertical-align: 2px; }
   .fnd-m { color: var(--muted); font-size: 11px; margin-top: 3px; }
   .pf-row { display: grid; grid-template-columns: 88px 1fr; gap: 8px; padding: 4px 0; }
   .pf-k { color: var(--muted); font-size: 12px; text-transform: capitalize; }
@@ -403,6 +423,13 @@
       else if (/^exp:r:\d+$/.test(k)) el.addEventListener("click", () => { if (el.dataset.series) openFromEv(base + 1, el.dataset.label || "Sensor", { type: "fetch", adapter: el.dataset.adapter || "cognite-datapoints", id: el.dataset.series, label: el.dataset.label || el.dataset.series }); });
       else if (k.startsWith("doc:") && !k.includes(":n") && !k.includes(":t")) el.addEventListener("click", () => openFromEv(base + 1, k.slice(4), { type: "open_document", name: k.slice(4) }));
       else if (k === "exp:codebtn") el.addEventListener("click", () => { const code = nodes.get(`p${base}:exp:code`); if (code) code.hidden = !code.hidden; });
+      else if (k === "fd:src") el.addEventListener("click", () => openFromEv(base + 1, el.dataset.title || el.dataset.name, { type: "open_source", name: el.dataset.name }));
+      else if (k === "fd:investigate") el.addEventListener("click", () => send({ type: "user_message", text: `Investigate this finding and show me the evidence: “${el.dataset.text}”` }));
+      else if (k === "fd:fix") el.addEventListener("click", () => send({ type: "user_message", text: `Propose a concrete fix for this finding: “${el.dataset.text}”` }));
+      else if (k === "fd:resolve") el.addEventListener("click", () => {
+        send({ type: "resolve_finding", id: Number(el.dataset.id) });
+        openFromEv(base, panels[base] ? panels[base].title : "Finding", { type: "open_finding", id: Number(el.dataset.id) });
+      });
       else if (k.startsWith("mode:")) el.addEventListener("click", () => { const [, name, mode] = k.split(":"); openFromEv(base, panels[base] ? panels[base].title : name, { type: "open_source", name, mode }); });
       else if (/^iss:[^:]+:\d+:\d+$/.test(k)) el.addEventListener("click", () => openFromEv(base + 1, "Asset", { type: "open_asset", id: k.split(":")[1] }));
       return;
@@ -415,6 +442,11 @@
     else if (/^item:\d+:h$/.test(key)) el.addEventListener("click", () => { if (el.dataset.ev) openFromEv(0, el.dataset.title || el.textContent, JSON.parse(el.dataset.ev)); });
     // recents / starred chips in the header
     else if (/^(rc|st):\d+$/.test(key)) el.addEventListener("click", () => { if (el.dataset.ev) openFromEv(0, el.dataset.title || "", JSON.parse(el.dataset.ev)); });
+    // finding cards on the board open the finding itself
+    else if (/^fnd:\d+$/.test(key)) el.addEventListener("click", () => {
+      const b = panels.findIndex((p) => p.isBoard);
+      openFromEv(b < 0 ? 0 : b + 1, "Finding", { type: "open_finding", id: Number(key.slice(4)) });
+    });
     // tree nodes inside chat cards (unprefixed) open at panel 0
     else if (/^tn:[^:]+$/.test(key)) el.addEventListener("click", () => {
       const nm = el.querySelector(".tree-name");

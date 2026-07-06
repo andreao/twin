@@ -208,7 +208,7 @@ class ActivityPanel {
 class FindingsPanel {
   constructor(root = 'board-root') {
     this.root = root;
-    this.ids = new Set();
+    this.ids = new Map(); // id -> status
     this.made = false;
   }
   _emit(m) { TWIN_MUT.push(m); }
@@ -224,22 +224,31 @@ class FindingsPanel {
     this._emit({ op: 'setAttr', key: 'tile:findings:b', name: 'class', value: 'fnd-list' });
   }
 
-  set(id, severity, text, source) {
+  set(id, severity, text, source, status) {
     this._tile();
     const rk = `fnd:${id}`;
+    const cls = `fnd sev-${severity}${status === 'resolved' ? ' resolved' : ''}`;
     if (this.ids.has(id)) {
+      this.ids.set(id, status);
+      this._emit({ op: 'setAttr', key: rk, name: 'class', value: cls });
       this._emit({ op: 'setText', key: `${rk}:t`, text });
+      this._count();
       return;
     }
-    this.ids.add(id);
-    this._emit({ op: 'setText', key: 'tile:findings:h', text: `Findings — ${this.ids.size}` });
+    this.ids.set(id, status);
+    this._count();
     this._emit({ op: 'create', key: rk, tag: 'div', parent: 'tile:findings:b', index: 0 });
-    this._emit({ op: 'setAttr', key: rk, name: 'class', value: `fnd sev-${severity}` });
+    this._emit({ op: 'setAttr', key: rk, name: 'class', value: cls });
     this._emit({ op: 'create', key: `${rk}:t`, tag: 'div', parent: rk, index: 0 });
     this._emit({ op: 'setText', key: `${rk}:t`, text });
     this._emit({ op: 'create', key: `${rk}:m`, tag: 'div', parent: rk, index: 1 });
     this._emit({ op: 'setAttr', key: `${rk}:m`, name: 'class', value: 'fnd-m' });
     this._emit({ op: 'setText', key: `${rk}:m`, text: source ? `${severity} · in ${source} · found by the agent` : `${severity} · found by the agent` });
+  }
+
+  _count() {
+    const open = [...this.ids.values()].filter((s) => s !== 'resolved').length;
+    this._emit({ op: 'setText', key: 'tile:findings:h', text: `Findings — ${open}${open < this.ids.size ? ` (${this.ids.size - open} resolved)` : ''}` });
   }
 }
 
