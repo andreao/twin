@@ -32,14 +32,18 @@ const T = (() => {
   const findingsSrc = G.source('findings', false);
   const lensesSrc = G.source('lenses', false);
 
+  // The UI is TWO concepts: the conversation (feed) and the twin — one board of
+  // lens tiles that grows as the agent works.  Sources are the rawest lenses;
+  // agent-authored lenses, findings, and the user profile are tiles like any other.
+  // The agenda/activity folds render as the one-line "now" strip above the board.
   const feed = new Feed('feed-root');
-  const profile = new ProfilePanel('profile-root');
-  const sourcesPanel = new SourcesPanel('sources-root');
-  const skillsPanel = new SkillsPanel('skills-root');
-  const agendaPanel = new AgendaPanel('agenda-root');
-  const activityPanel = new ActivityPanel('activity-root');
-  const findingsPanel = new FindingsPanel('findings-root');
-  const lensPanel = new LensPanel('lenses-root');
+  const profile = new ProfilePanel();      // → tile:you on the board
+  const sourcesPanel = new SourcesPanel(); // → sr:* tiles on the board
+  const skillsPanel = new SkillsPanel('skills-root'); // capability registry (not on the board)
+  const agendaPanel = new AgendaPanel();   // → the now-strip plan line
+  const activityPanel = new ActivityPanel(); // → the now-strip last-action line
+  const findingsPanel = new FindingsPanel(); // → tile:findings on the board
+  const lensPanel = new LensPanel();       // → ln:* tiles on the board
 
   G.observe(feedSrc, (delta) => {
     for (const [row] of delta.entries()) feed.append(row.asObject());
@@ -538,6 +542,13 @@ const T = (() => {
   // duplicate keys) over the materialized rows.  The result lands in the activity
   // log, which the agent perceives next turn — its analysis loop.
   function inspectSource(src) {
+    const meta = sources.get(src);
+    if (meta && meta.kind === 'documents') {
+      const types = {};
+      meta.docs.forEach((d) => { const e = String(d.name).split('.').pop().toLowerCase(); types[e] = (types[e] || 0) + 1; });
+      logActivity(`inspected “${src}”: ${meta.docs.length} files · ${Object.entries(types).map(([k, v]) => `${v} ${k}`).join(', ')}`);
+      return;
+    }
     const id = sourceIds.get(src);
     if (id === undefined) { logActivity(`no source “${src}” to inspect`); return; }
     const rows = G.stateOf(id).support().map((r) => r.asObject());

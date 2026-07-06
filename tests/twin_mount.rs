@@ -223,7 +223,7 @@ fn hierarchy_rolls_up_links_and_agent_can_inspect() {
     g.twin_agent_tool(r#"{"tool":"inspect","args":{"source":"timeseries"}}"#);
     let log = g.twin_from(0);
     assert!(log.contains("inspected") && log.contains("timeseries"), "inspect did not run");
-    assert!(log.contains("act:"), "inspect result not in the activity log");
+    assert!(log.contains("agent-act"), "inspect result not on the now-strip");
 }
 
 #[test]
@@ -279,13 +279,13 @@ fn agent_keeps_an_agenda_and_activity_log() {
     let mut g = JsGraph::new_twin();
     g.twin_agent_tool(r#"{"tool":"plan","args":{"items":["Profile the turbines source","Look for data gaps"]}}"#);
     g.twin_agent_tool(r#"{"tool":"work","args":{"task":"profile","text":"profiling turbines: checking ranges"}}"#);
+    // the agenda + activity fold to the one-line now-strip above the board
     let muts = g.twin_from(0);
-    assert!(muts.contains("ag:1") && muts.contains("Profile the turbines source"), "agenda row missing");
-    assert!(muts.contains("ag-row active"), "task not marked active");
-    assert!(muts.contains("act:") && muts.contains("profiling turbines"), "activity note missing");
-    // status changes are new EVENTS folded onto the same row (event sourcing)
+    assert!(muts.contains("agent-plan") && muts.contains("Profile the turbines source"), "plan line missing: {muts}");
+    assert!(muts.contains("agent-act") && muts.contains("profiling turbines"), "activity line missing");
+    // status changes are new EVENTS; when the active item is done, the fold moves on
     g.twin_agent_tool(r#"{"tool":"done","args":{"task":"profile"}}"#);
-    assert!(g.twin_from(0).contains("ag-row done"), "task not marked done");
+    assert!(g.twin_from(0).contains("plan: Look for data gaps"), "plan line did not advance");
     let seen = g.twin_perceive();
     assert!(seen.contains("Look for data gaps"), "agenda not perceived: {seen}");
     assert!(seen.contains("\"agendaDone\":1"), "done count not perceived: {seen}");
@@ -296,12 +296,25 @@ fn agent_records_findings_on_the_board() {
     let mut g = JsGraph::new_twin();
     g.twin_agent_tool(r#"{"tool":"finding","args":{"severity":"warn","text":"3 turbines have no vibration sensor","source":"turbines"}}"#);
     let muts = g.twin_from(0);
+    assert!(muts.contains("tile:findings"), "findings tile did not appear on the board");
+    assert!(muts.contains("Findings — 1"), "tile title has no count");
     assert!(muts.contains("fnd:1") && muts.contains("sev-warn"), "finding card missing: {muts}");
     assert!(muts.contains("no vibration sensor"), "finding text missing");
     // filing the same finding twice is a no-op
     g.twin_agent_tool(r#"{"tool":"finding","args":{"severity":"warn","text":"3 turbines have no vibration sensor"}}"#);
     assert!(!g.twin_from(0).contains("fnd:2"), "duplicate finding filed twice");
     assert!(g.twin_perceive().contains("no vibration sensor"), "finding not perceived");
+}
+
+#[test]
+fn inspect_handles_a_documents_source() {
+    let mut g = JsGraph::new_twin();
+    let d = std::env::temp_dir().join("insp_docs.json");
+    std::fs::write(&d, r#"[{"name":"PID-1.pdf","bytes":1},{"name":"train.mp4","bytes":2}]"#).unwrap();
+    g.twin_read_source("documents", d.to_str().unwrap(), "mounted");
+    g.twin_agent_tool(r#"{"tool":"inspect","args":{"source":"documents"}}"#);
+    let log = g.twin_from(0);
+    assert!(log.contains("2 files") && log.contains("1 pdf"), "documents inspect failed: {log}");
 }
 
 #[test]

@@ -58,14 +58,29 @@ class Feed {
   }
 }
 
+// "About you" is a TILE on the twin board like everything else — it does not exist
+// until the agent learns the first fact, then it grows.  The twin starts empty.
 class ProfilePanel {
-  constructor(root = 'profile-root') {
+  constructor(root = 'board-root') {
     this.root = root;
     this.fields = new Map();
+    this.made = false;
   }
   _emit(m) { TWIN_MUT.push(m); }
 
+  _tile() {
+    if (this.made) return;
+    this.made = true;
+    this._emit({ op: 'create', key: 'tile:you', tag: 'div', parent: this.root, index: 0 });
+    this._emit({ op: 'setAttr', key: 'tile:you', name: 'class', value: 'tile you-tile' });
+    this._emit({ op: 'create', key: 'tile:you:h', tag: 'div', parent: 'tile:you', index: 0 });
+    this._emit({ op: 'setAttr', key: 'tile:you:h', name: 'class', value: 'tile-h' });
+    this._emit({ op: 'setText', key: 'tile:you:h', text: 'About you' });
+    this._emit({ op: 'create', key: 'tile:you:b', tag: 'div', parent: 'tile:you', index: 1 });
+  }
+
   set(field, value) {
+    this._tile();
     if (this.fields.has(field)) {
       this.fields.set(field, value);
       this._emit({ op: 'setText', key: `pf:${field}:v`, text: `${value}` });
@@ -74,7 +89,7 @@ class ProfilePanel {
     const i = this.fields.size;
     this.fields.set(field, value);
     const rk = `pf:${field}`;
-    this._emit({ op: 'create', key: rk, tag: 'div', parent: this.root, index: i });
+    this._emit({ op: 'create', key: rk, tag: 'div', parent: 'tile:you:b', index: i });
     this._emit({ op: 'setAttr', key: rk, name: 'class', value: 'pf-row' });
     this._emit({ op: 'create', key: `${rk}:k`, tag: 'div', parent: rk, index: 0 });
     this._emit({ op: 'setAttr', key: `${rk}:k`, name: 'class', value: 'pf-k' });
@@ -94,7 +109,7 @@ class ProfilePanel {
 // The mounted/materialized data sources (the residence spectrum, §7/§9.9).  Each row
 // shows a source's name, its residence badge, and its size — the twin growing.
 class SourcesPanel {
-  constructor(root = 'sources-root') {
+  constructor(root = 'board-root') {
     this.root = root;
     this.names = new Map();
   }
@@ -127,77 +142,72 @@ class SourcesPanel {
 
 // ---- the agent-at-work surfaces ---------------------------------------------
 // Agenda, activity, findings, and agent-authored lenses are all PURE EVENT SOURCING
-// (§8): each is an append-only stream in the one graph, and these panels are folds
-// over those streams (last event per key wins in the DOM; the full history stays in
-// the event log).  They exist so the human can see what the agent is doing.
+// (§8): append-only streams in the one graph, folded here for the human.  The UI has
+// exactly TWO concepts — the conversation and the twin (a board of lenses that grows
+// as the agent works) — so these folds render either as board tiles or as the single
+// one-line "now" strip above the board.  Full history stays in the event log.
 
-// The agent's own to-do list.  Events: { id, text, status } — a status change is a
-// new event for the same id, folded here into the row's chip.
+// The agenda folds to ONE line in the now-strip: the active (or next open) item.
 class AgendaPanel {
-  constructor(root = 'agenda-root') {
-    this.root = root;
-    this.ids = new Map();
+  constructor(key = 'agent-plan') {
+    this.key = key;
+    this.items = new Map();
   }
-  _emit(m) { TWIN_MUT.push(m); }
 
   set(id, text, status) {
-    const rk = `ag:${id}`;
-    if (this.ids.has(id)) {
-      this.ids.set(id, status);
-      this._emit({ op: 'setAttr', key: rk, name: 'class', value: `ag-row ${status}` });
-      this._emit({ op: 'setText', key: `${rk}:s`, text: status });
-      if (text) this._emit({ op: 'setText', key: `${rk}:t`, text });
-      return;
-    }
-    const i = this.ids.size;
-    this.ids.set(id, status);
-    this._emit({ op: 'create', key: rk, tag: 'div', parent: this.root, index: i });
-    this._emit({ op: 'setAttr', key: rk, name: 'class', value: `ag-row ${status}` });
-    this._emit({ op: 'create', key: `${rk}:t`, tag: 'div', parent: rk, index: 0 });
-    this._emit({ op: 'setAttr', key: `${rk}:t`, name: 'class', value: 'ag-t' });
-    this._emit({ op: 'setText', key: `${rk}:t`, text: text || '' });
-    this._emit({ op: 'create', key: `${rk}:s`, tag: 'span', parent: rk, index: 1 });
-    this._emit({ op: 'setAttr', key: `${rk}:s`, name: 'class', value: 'ag-s' });
-    this._emit({ op: 'setText', key: `${rk}:s`, text: status });
+    const prev = this.items.get(id) || {};
+    this.items.set(id, { text: text || prev.text || '', status });
+    const all = [...this.items.values()];
+    const open = all.filter((i) => i.status !== 'done');
+    const active = all.find((i) => i.status === 'active') || open[0];
+    const line = active
+      ? `plan: ${active.text}${open.length > 1 ? `  (+${open.length - 1} more)` : ''}`
+      : (all.length ? 'plan: all done' : '');
+    TWIN_MUT.push({ op: 'setText', key: this.key, text: line });
   }
 }
 
-// The agent's background work log — newest note on top, display bounded (the full
-// log stays in the graph's event log).
+// The work log folds to the LATEST note in the now-strip (history is in the graph).
 class ActivityPanel {
-  constructor(root = 'activity-root', cap = 30) {
-    this.root = root;
-    this.cap = cap;
-    this.keys = [];
+  constructor(key = 'agent-act') {
+    this.key = key;
   }
-  _emit(m) { TWIN_MUT.push(m); }
-
   add(seq, text) {
-    const k = `act:${seq}`;
-    this._emit({ op: 'create', key: k, tag: 'div', parent: this.root, index: 0 });
-    this._emit({ op: 'setAttr', key: k, name: 'class', value: 'act-row' });
-    this._emit({ op: 'setText', key: k, text });
-    this.keys.push(k);
-    if (this.keys.length > this.cap) this._emit({ op: 'remove', key: this.keys.shift() });
+    TWIN_MUT.push({ op: 'setText', key: this.key, text });
   }
 }
 
-// Data issues / insights the agent discovered, as severity-tinted cards.
+// Findings are a TILE on the board — it appears with the first discovery and its
+// title carries the count; cards inside are severity-tinted, newest first.
 class FindingsPanel {
-  constructor(root = 'findings-root') {
+  constructor(root = 'board-root') {
     this.root = root;
     this.ids = new Set();
+    this.made = false;
   }
   _emit(m) { TWIN_MUT.push(m); }
 
+  _tile() {
+    if (this.made) return;
+    this.made = true;
+    this._emit({ op: 'create', key: 'tile:findings', tag: 'div', parent: this.root, index: 0 });
+    this._emit({ op: 'setAttr', key: 'tile:findings', name: 'class', value: 'tile findings-tile' });
+    this._emit({ op: 'create', key: 'tile:findings:h', tag: 'div', parent: 'tile:findings', index: 0 });
+    this._emit({ op: 'setAttr', key: 'tile:findings:h', name: 'class', value: 'tile-h' });
+    this._emit({ op: 'create', key: 'tile:findings:b', tag: 'div', parent: 'tile:findings', index: 1 });
+    this._emit({ op: 'setAttr', key: 'tile:findings:b', name: 'class', value: 'fnd-list' });
+  }
+
   set(id, severity, text, source) {
+    this._tile();
     const rk = `fnd:${id}`;
     if (this.ids.has(id)) {
       this._emit({ op: 'setText', key: `${rk}:t`, text });
       return;
     }
     this.ids.add(id);
-    this._emit({ op: 'create', key: rk, tag: 'div', parent: this.root, index: 0 });
+    this._emit({ op: 'setText', key: 'tile:findings:h', text: `Findings — ${this.ids.size}` });
+    this._emit({ op: 'create', key: rk, tag: 'div', parent: 'tile:findings:b', index: 0 });
     this._emit({ op: 'setAttr', key: rk, name: 'class', value: `fnd sev-${severity}` });
     this._emit({ op: 'create', key: `${rk}:t`, tag: 'div', parent: rk, index: 0 });
     this._emit({ op: 'setText', key: `${rk}:t`, text });
@@ -210,7 +220,7 @@ class FindingsPanel {
 // Agent-authored lenses (§4.1: lenses are data) — the Artifacts page.  Each card
 // carries the lens's full lineage: which source, what code, who authored it.
 class LensPanel {
-  constructor(root = 'lenses-root') {
+  constructor(root = 'board-root') {
     this.root = root;
     this.names = new Map();
   }
