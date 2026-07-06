@@ -101,25 +101,29 @@ impl JsGraph {
     /// and land the result back in JS to render.  The CORE knows only adapter *keys* —
     /// each adapter owns its own domain specifics (endpoints, on-disk layout), so the
     /// core carries no notion of "asset", "sensor", or CDF.  Returns a row count.
-    pub fn twin_fetch(&mut self, adapter: &str, id: &str, label: &str) -> usize {
-        self.fetch_to(adapter, id, label, false)
+    /// `panel` picks the column of the detail stack the chart renders into.
+    pub fn twin_fetch(&mut self, adapter: &str, id: &str, label: &str, panel: usize) -> usize {
+        self.fetch_to(adapter, id, label, Some(panel))
     }
 
     /// The same boundary fetch, rendered as a card INLINE in the conversation — the
     /// agent's `show {view:"chart"}` tool.  Same adapters, same lineage; only the
     /// render target differs.
     pub fn twin_show_chart(&mut self, adapter: &str, id: &str, label: &str) -> usize {
-        self.fetch_to(adapter, id, label, true)
+        self.fetch_to(adapter, id, label, None)
     }
 
-    fn fetch_to(&mut self, adapter: &str, id: &str, label: &str, inline: bool) -> usize {
+    /// `panel: Some(i)` renders into stack column i; `None` renders an inline card.
+    fn fetch_to(&mut self, adapter: &str, id: &str, label: &str, panel: Option<usize>) -> usize {
         match adapter {
             // materialize-on-demand time-series lens (§9.11) backed by the Cognite adapter.
-            "cognite-datapoints" => self.fetch_datapoints(id, label, inline),
+            "cognite-datapoints" => self.fetch_datapoints(id, label, panel),
             other => {
                 let msg = format!("no adapter “{other}”");
-                let f = if inline { "T.chartInlineMessage" } else { "T.chartMessage" };
-                self.call(&format!("{f}({label:?}, {msg:?})"));
+                match panel {
+                    Some(p) => self.call(&format!("T.chartMessage({label:?}, {msg:?}, {p})")),
+                    None => self.call(&format!("T.chartInlineMessage({label:?}, {msg:?})")),
+                };
                 0
             }
         }
@@ -130,8 +134,11 @@ impl JsGraph {
     /// it (§7), then hand the points to the JS chart lens (explorer or inline card).
     /// Only this method (and the `cognite` module) knows the CDF layout; the core
     /// dispatch above does not.
-    fn fetch_datapoints(&mut self, id: &str, label: &str, inline: bool) -> usize {
-        let msg_fn = if inline { "T.chartInlineMessage" } else { "T.chartMessage" };
+    fn fetch_datapoints(&mut self, id: &str, label: &str, panel: Option<usize>) -> usize {
+        let msg = |m: &str| match panel {
+            Some(p) => format!("T.chartMessage({label:?}, {m:?}, {p})"),
+            None => format!("T.chartInlineMessage({label:?}, {m:?})"),
+        };
         let path = format!("data/cognite/datapoints/{id}.csv");
         let mut pts = crate::source::read_series_downsampled(&path, 700);
         let mut provenance = "materialized locally";
@@ -144,11 +151,13 @@ impl JsGraph {
                     pts = crate::source::downsample(raw, 700);
                 }
                 Ok(_) => {
-                    self.call(&format!("{msg_fn}({label:?}, {:?})", "no datapoints exist for this series"));
+                    let call = msg("no datapoints exist for this series");
+                    self.call(&call);
                     return 0;
                 }
                 Err(e) => {
-                    self.call(&format!("{msg_fn}({label:?}, {:?})", format!("couldn't fetch on demand — {e}")));
+                    let call = msg(&format!("couldn't fetch on demand — {e}"));
+                    self.call(&call);
                     return 0;
                 }
             }
@@ -156,8 +165,11 @@ impl JsGraph {
 
         let n = pts.len();
         let json = serde_json::to_string(&pts).unwrap_or_else(|_| "[]".into());
-        let render = if inline { "T.chartInline" } else { "T.chartSeries" };
-        self.call(&format!("{render}({id:?}, {label:?}, {json}, {provenance:?})"));
+        let call = match panel {
+            Some(p) => format!("T.chartSeries({id:?}, {label:?}, {json}, {provenance:?}, {p})"),
+            None => format!("T.chartInline({id:?}, {label:?}, {json}, {provenance:?})"),
+        };
+        self.call(&call);
         n
     }
 

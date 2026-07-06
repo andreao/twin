@@ -152,7 +152,8 @@ fn graph_loop(rx: Receiver<Cmd>, wake: Sender<()>) {
                         let adapter = v["adapter"].as_str().unwrap_or("");
                         let id = v["id"].as_str().unwrap_or("");
                         let label = v["label"].as_str().unwrap_or(id);
-                        g.twin_fetch(adapter, id, label);
+                        let panel = v["panel"].as_u64().unwrap_or(0) as usize;
+                        g.twin_fetch(adapter, id, label, panel);
                     }
                 }
                 broadcast_new(&mut g, &mut cursor, &mut clients);

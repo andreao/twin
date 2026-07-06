@@ -265,6 +265,33 @@ class LensPanel {
   }
 }
 
+// A row of clickable page-chips in the header — used for RECENTS (a fold of the
+// user's raw open-events) and STARRED (a fold of their star-events).  Both are
+// lenses over the input stream: no client-side state, fully replayable.
+class ChipRow {
+  constructor(root, pfx, starred) {
+    this.root = root;
+    this.pfx = pfx;
+    this.starred = !!starred;
+    this.keys = [];
+  }
+  _emit(m) { TWIN_MUT.push(m); }
+
+  render(items) {
+    for (const k of this.keys) this._emit({ op: 'remove', key: k });
+    this.keys = [];
+    items.forEach((it, i) => {
+      const k = `${this.pfx}:${i}`;
+      this._emit({ op: 'create', key: k, tag: 'button', parent: this.root, index: i });
+      this._emit({ op: 'setAttr', key: k, name: 'class', value: 'chip' + (this.starred ? ' starred' : '') });
+      this._emit({ op: 'setAttr', key: k, name: 'data-ev', value: JSON.stringify(it.ev) });
+      this._emit({ op: 'setAttr', key: k, name: 'data-title', value: it.title });
+      this._emit({ op: 'setText', key: k, text: (this.starred ? '★ ' : '') + it.title });
+      this.keys.push(k);
+    });
+  }
+}
+
 // The installed skills (capabilities the agent can draw on), seeded by the core
 // skills-loader (§4.1) from the static skills/ directory.
 class SkillsPanel {

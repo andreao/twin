@@ -50,7 +50,7 @@ fn opening_a_source_renders_a_browsable_table() {
     // the user clicks the source in the UI → backward event
     g.twin_event(r#"{"type":"open_source","name":"turbines"}"#);
     let muts = g.twin_from(0);
-    assert!(muts.contains("explorer-root"), "explorer table not rendered");
+    assert!(muts.contains("panel:0:body"), "table not rendered into stack panel 0");
     assert!(muts.contains("exp:tbl"));
     assert!(muts.contains("gearbox_temp"), "column header missing");
     assert!(muts.contains("WT-01"), "row data missing");
@@ -80,7 +80,7 @@ fn charting_a_sensor_renders_an_svg_line() {
         None => return,
     };
     let mut g = JsGraph::new_twin();
-    let n = g.twin_fetch("cognite-datapoints", &id, "sensor");
+    let n = g.twin_fetch("cognite-datapoints", &id, "sensor", 0);
     assert!(n > 0, "no points read for {id}");
     let muts = g.twin_from(0);
     assert!(muts.contains("\"tag\":\"svg\""), "no svg element rendered");
@@ -135,7 +135,7 @@ fn parametrized_datapoints_lens_fetches_on_demand() {
     let mut g = JsGraph::new_twin();
     // 1009048440794092: empty in our 30-day window, but has data back in 2023
     let _ = std::fs::remove_file("data/cognite/datapoints/1009048440794092.csv");
-    let n = g.twin_fetch("cognite-datapoints", "1009048440794092", "VAL-test");
+    let n = g.twin_fetch("cognite-datapoints", "1009048440794092", "VAL-test", 0);
     eprintln!("on-demand chart: {n} points");
     let muts = g.twin_from(0);
     if n > 0 {
@@ -253,7 +253,7 @@ fn agent_shows_a_chart_inline_in_the_conversation() {
     // the chart is a view CARD in the feed, not the explorer pane
     assert!(muts.contains("feed-item view"), "no view card in the conversation: {}", &muts[..muts.len().min(300)]);
     assert!(muts.contains(":svg") && muts.contains("chart-line"), "no inline svg chart");
-    assert!(!muts.contains("explorer-root"), "inline chart leaked into the explorer pane");
+    assert!(!muts.contains("panel:0"), "inline chart leaked into the detail stack");
 }
 
 #[test]
@@ -377,6 +377,42 @@ fn describe_gives_sources_human_titles() {
     assert!(muts.contains("Turbine fleet"), "title not applied to the tile");
     assert!(muts.contains("All wind turbines"), "description not applied to the tile");
     assert!(g.twin_perceive().contains("Turbine fleet"), "title not perceived");
+}
+
+#[test]
+fn detail_stack_panels_are_independent_columns() {
+    let path = write_temp_csv();
+    let mut g = JsGraph::new_twin();
+    g.twin_read_source("turbines", &path, "mounted");
+    // column 0: the table; column 1: something else — both alive at once
+    g.twin_event(r#"{"type":"open_source","name":"turbines","panel":0}"#);
+    g.twin_event(r#"{"type":"search","query":"WT-01","panel":1}"#);
+    let muts = g.twin_from(0);
+    assert!(muts.contains("p0:exp:tbl"), "no table in column 0: {muts}");
+    assert!(muts.contains("p1:exp:note"), "no search in column 1");
+    // re-opening at column 0 invalidates column 1 (everything to the right)
+    let before = g.twin_total();
+    g.twin_event(r#"{"type":"open_source","name":"turbines","panel":0}"#);
+    let tail = g.twin_from(before);
+    assert!(tail.contains(r#""op":"remove","key":"p1:"#), "column 1 not cleared on re-open at 0: {tail}");
+}
+
+#[test]
+fn recents_and_stars_are_lenses_over_raw_input() {
+    let path = write_temp_csv();
+    let mut g = JsGraph::new_twin();
+    g.twin_read_source("turbines", &path, "mounted");
+    // visiting pages derives recents chips…
+    g.twin_event(r#"{"type":"open_source","name":"turbines","panel":0,"title":"Turbine fleet"}"#);
+    let muts = g.twin_from(0);
+    assert!(muts.contains("rc:0") && muts.contains("Turbine fleet"), "no recents chip: {muts}");
+    // …and starring derives a starred chip; starring again removes it (a toggle fold)
+    g.twin_event(r#"{"type":"star","title":"Turbine fleet","target":{"type":"open_source","name":"turbines"}}"#);
+    let starred = g.twin_from(0);
+    assert!(starred.contains("st:0") && starred.contains("★ Turbine fleet"), "no starred chip");
+    let before = g.twin_total();
+    g.twin_event(r#"{"type":"star","title":"Turbine fleet","target":{"type":"open_source","name":"turbines"}}"#);
+    assert!(g.twin_from(before).contains(r#""op":"remove","key":"st:0"#), "unstar did not remove the chip");
 }
 
 #[test]

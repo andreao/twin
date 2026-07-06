@@ -6,37 +6,35 @@
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
-  [hidden] { display: none !important; }   /* beats component display:flex/grid */
+  [hidden] { display: none !important; }
   body {
     margin: 0; background: var(--bg); color: var(--ink);
     font: 15px/1.55 -apple-system, "SF Pro Text", system-ui, sans-serif;
+    display: flex; flex-direction: column; height: 100vh; overflow: hidden;
   }
 
-  /* ---- ONE header over everything, then TWO concepts: conversation | the twin ---- */
-  .top { display: flex; align-items: center; gap: 22px; padding: 0 20px; height: 52px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  /* ---- one header: brand · starred · recents · live ---- */
+  .top { display: flex; align-items: center; gap: 14px; padding: 0 18px; height: 50px; background: var(--panel); border-bottom: 1px solid var(--line); flex: none; }
   .brand { font-weight: 650; font-size: 16px; letter-spacing: -0.01em; display: flex; align-items: center; gap: 9px; flex: none; }
   .brand svg { display: block; }
-  .agent-strip { flex: 1; min-width: 0; font-size: 12.5px; color: var(--muted); display: flex; align-items: baseline; gap: 10px; }
-  .agent-strip > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .now-dot { width: 7px; height: 7px; border-radius: 50%; background: #ccc; flex: none; align-self: center; }
-  .agent-strip.on .now-dot { background: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
-  @keyframes pulse { 50% { opacity: .35; } }
-  #agent-now-text { flex: none; }
-  #agent-act { max-width: 52ch; }
-  #agent-plan { max-width: 44ch; color: #7a4a38; }
-  .search-box { width: 230px; flex: none; border: 1px solid var(--line); background: var(--bg); border-radius: 9px; padding: 7px 12px; font: inherit; font-size: 13px; color: var(--ink); outline: none; }
-  .search-box:focus { border-color: var(--accent); }
-  .status { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 7px; flex: none; }
+  .chips { display: flex; align-items: center; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .chips::-webkit-scrollbar { display: none; }
+  #stars-root { flex: none; max-width: 40%; }
+  #recents-root { flex: 1; }
+  #recents-root:not(:empty)::before { content: "recent"; color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; margin-right: 2px; flex: none; }
+  .chip { border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 99px; padding: 4px 12px; font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; flex: none; transition: border-color .12s, background .12s; }
+  .chip:hover { border-color: var(--accent); background: var(--accent-soft); }
+  .chip.starred { color: #7a4a38; background: var(--accent-soft); border-color: #eeddd4; }
+  .status { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 7px; flex: none; margin-left: auto; }
   .status .dot { width: 7px; height: 7px; border-radius: 50%; background: #ccc; }
   .status.live .dot { background: #4a9d5b; }
 
-  .app { display: grid; grid-template-columns: minmax(400px, 34%) 1fr; height: calc(100vh - 52px); overflow: hidden; }
-
-  /* ---- the conversation ---- */
-  .conv { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--panel); border-right: 1px solid var(--line); }
-
+  /* ---- chat front and center; detail stack slides in on the right ---- */
+  .app { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+  .conv { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--panel); flex: 1; }
+  .app.split .conv { flex: none; width: 464px; border-right: 1px solid var(--line); }
   .feedwrap { flex: 1; min-height: 0; overflow-y: auto; }
-  .feed { padding: 20px 20px 8px; display: flex; flex-direction: column; gap: 4px; }
+  .feed { max-width: 760px; margin: 0 auto; padding: 22px 24px 8px; display: flex; flex-direction: column; gap: 4px; }
   .feed-item { padding: 8px 0; animation: rise .28s ease; }
   @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
   .feed-item.agent .text { font-size: 15px; }
@@ -52,42 +50,65 @@
   .q-option { display: block; width: 100%; text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 9px 13px; margin: 6px 0; font: inherit; color: var(--ink); cursor: pointer; transition: background .12s, border-color .12s; }
   .q-option:hover { background: var(--accent-soft); border-color: var(--accent); }
 
-  /* inline agent views — rich visuals rendered into the conversation */
+  /* inline agent views — cards in the conversation; the title opens them in depth */
   .feed-item.view { background: var(--bg); border: 1px solid var(--line); border-radius: 14px; padding: 13px 14px; margin: 8px 0; }
   .view-title { font-weight: 550; font-size: 13px; margin-bottom: 10px; }
+  .view-title.openable { cursor: pointer; color: #7a4a38; }
+  .view-title.openable:hover { color: var(--accent); }
+  .view-title.openable::after { content: "  open ↗"; color: var(--muted); font-weight: 400; font-size: 11px; }
   .view-body { min-height: 0; }
-  .view-scroll { overflow-x: auto; max-height: 46vh; overflow-y: auto; }
-  .feed-item.view .doc-frame { width: 100%; height: 46vh; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+  .view-scroll { overflow-x: auto; max-height: 44vh; overflow-y: auto; }
+  .feed-item.view .doc-frame { width: 100%; height: 44vh; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
   .feed-item.view .doc-img { max-width: 100%; border: 1px solid var(--line); border-radius: 8px; }
 
-  .working { padding: 4px 20px 10px; height: 22px; color: var(--muted); font-size: 13px; display: none; align-items: center; gap: 8px; }
+  .working { max-width: 760px; margin: 0 auto; width: 100%; padding: 4px 24px 8px; height: 22px; color: var(--muted); font-size: 13px; display: none; align-items: center; gap: 8px; }
   .working.on { display: flex; }
   .spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--accent-soft); border-top-color: var(--accent); animation: spin .7s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  .composer { border-top: 1px solid var(--line); padding: 12px 16px 14px; }
-  .composer-inner { display: flex; gap: 10px; align-items: flex-end; background: var(--bg); border: 1px solid var(--line); border-radius: 14px; padding: 8px 8px 8px 14px; }
+  .composer { padding: 8px 18px 0; }
+  .composer-inner { max-width: 760px; margin: 0 auto; display: flex; gap: 10px; align-items: flex-end; background: var(--bg); border: 1px solid var(--line); border-radius: 14px; padding: 8px 8px 8px 14px; }
   .composer textarea { flex: 1; border: none; background: transparent; resize: none; font: inherit; color: var(--ink); outline: none; max-height: 140px; padding: 6px 0; }
   .composer button { border: none; background: var(--accent); color: #fff; border-radius: 10px; width: 34px; height: 34px; font-size: 16px; cursor: pointer; flex: none; }
-  .hint { margin: 6px auto 0; color: var(--muted); font-size: 11.5px; text-align: center; }
 
-  /* ---- the twin: a board of lenses that grows as the agent works ---- */
-  .twinpane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-  .board { flex: 1; min-height: 0; overflow-y: auto; padding: 20px 26px; }
-  .board-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; align-items: start; }
+  /* ---- the status bar (Claude Code-style): background work at a glance ---- */
+  .statusbar { max-width: 760px; margin: 0 auto; width: 100%; padding: 7px 24px 10px; font-size: 12px; color: var(--muted); display: flex; align-items: baseline; gap: 9px; cursor: pointer; flex: none; }
+  .statusbar:hover #status-open { color: var(--accent); }
+  .statusbar > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .now-dot { width: 7px; height: 7px; border-radius: 50%; background: #ccc; flex: none; align-self: center; }
+  .statusbar.on .now-dot { background: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  #agent-now-text { flex: none; }
+  #agent-act { max-width: 44ch; }
+  #agent-plan { max-width: 36ch; color: #7a4a38; }
+  #status-open { flex: none; margin-left: auto; color: var(--muted); }
+
+  /* ---- the detail stack: horizontal columns, Finder-style ---- */
+  .stack { flex: 1; min-width: 0; display: none; overflow-x: auto; overflow-y: hidden; background: var(--bg); }
+  .app.split .stack { display: flex; }
+  .panel { width: 520px; flex: none; min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); background: var(--bg); }
+  .panel:last-child { flex: 1 0 520px; max-width: 860px; }
+  .panel-head { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--line); flex: none; background: var(--panel); }
+  .panel-title { font-weight: 600; font-size: 13.5px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .panel-btn { border: none; background: none; color: var(--muted); font: inherit; font-size: 14px; cursor: pointer; padding: 2px 6px; border-radius: 6px; flex: none; }
+  .panel-btn:hover { background: var(--accent-soft); color: var(--accent); }
+  .panel-body { flex: 1; min-height: 0; overflow: auto; padding: 14px 16px; }
+
+  /* board (inside its panel): the twin as a grid of lens tiles */
+  .board-grid { display: grid; grid-template-columns: 1fr; gap: 10px; align-items: start; }
   #board-root:empty::after {
     content: "Your twin is empty. Point the agent at data, or just talk to it — every source it mounts and every lens it builds appears here, with its lineage.";
-    display: block; grid-column: 1 / -1; color: var(--muted); font-size: 13.5px; font-style: italic; max-width: 460px; line-height: 1.6;
+    display: block; color: var(--muted); font-size: 13px; font-style: italic; line-height: 1.6;
   }
-  #board-root > div { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 15px 17px; transition: border-color .12s, background .12s; }
+  #board-root > div { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 13px 15px; transition: border-color .12s, background .12s; }
   #board-root > .src-row { cursor: pointer; }
   #board-root > .src-row:hover { border-color: var(--accent); background: var(--accent-soft); }
-  .src-n { font-size: 14.5px; font-weight: 600; }
+  .src-n { font-size: 14px; font-weight: 600; }
   .src-desc { font-size: 12.5px; color: var(--ink); margin-top: 5px; line-height: 1.45; }
   .src-d { font-size: 11.5px; color: var(--muted); margin-top: 7px; }
   .tile-h { font-size: 13.5px; font-weight: 600; margin-bottom: 8px; }
-  .lens-code { font-family: ui-monospace, "SF Mono", monospace; font-size: 10.5px; background: var(--bg); border: 1px solid var(--line); padding: 7px 9px; border-radius: 8px; margin-top: 10px; white-space: pre-wrap; word-break: break-word; color: #6b665e; max-height: 92px; overflow-y: auto; }
-  .fnd-list { max-height: 280px; overflow-y: auto; }
+  .lens-code { font-family: ui-monospace, "SF Mono", monospace; font-size: 10.5px; background: var(--bg); border: 1px solid var(--line); padding: 7px 9px; border-radius: 8px; margin-top: 10px; white-space: pre-wrap; word-break: break-word; color: #6b665e; max-height: 140px; overflow-y: auto; }
+  .fnd-list { max-height: 300px; overflow-y: auto; }
   .fnd { border: 1px solid var(--line); border-left: 3px solid var(--line); border-radius: 9px; padding: 8px 10px; margin: 6px 0; font-size: 12.5px; background: var(--bg); }
   .fnd.sev-info { border-left-color: var(--accent); }
   .fnd.sev-warn { border-left-color: #d9902a; }
@@ -97,65 +118,53 @@
   .pf-k { color: var(--muted); font-size: 12px; text-transform: capitalize; }
   .pf-v { font-size: 13px; }
 
-  /* ---- an expanded lens (a tile, opened) ---- */
-  .expand { flex: 1; min-height: 0; overflow: auto; padding: 16px 26px; }
-  .expand-bar { display: flex; align-items: baseline; gap: 16px; margin-bottom: 12px; }
-  #expand-back { color: var(--accent); cursor: pointer; font-size: 13px; flex: none; }
-  #expand-title { font-weight: 600; font-size: 14px; }
-  #explorer-root table, .view-body table { border-collapse: collapse; width: 100%; font-size: 13px; }
-  #explorer-root th, .view-body th { text-align: left; position: sticky; top: 0; background: var(--bg); color: var(--muted); font-weight: 500; padding: 8px 11px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-  #explorer-root td, .view-body td { padding: 6px 11px; border-bottom: 1px solid var(--line); white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
-  #explorer-root tr:hover td, .view-body tr:hover td { background: var(--panel); }
+  /* content lenses inside panels */
+  .panel-body table, .view-body table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  .panel-body th, .view-body th { text-align: left; position: sticky; top: 0; background: var(--bg); color: var(--muted); font-weight: 500; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .panel-body td, .view-body td { padding: 5px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; max-width: 300px; overflow: hidden; text-overflow: ellipsis; }
+  .panel-body tr:hover td, .view-body tr:hover td { background: var(--panel); }
   .explorer-note { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
-  #explorer-root .chartable { cursor: pointer; }
-  #explorer-root .chartable:hover td { background: var(--accent-soft); }
-  /* chart lens */
-  .chart { width: 100%; height: auto; max-height: 72vh; display: block; }
+  .panel-body .chartable { cursor: pointer; }
+  .panel-body .chartable:hover td { background: var(--accent-soft); }
+  .chart { width: 100%; height: auto; max-height: 66vh; display: block; }
   .chart-line { fill: none; stroke: var(--accent); stroke-width: 1.5; }
   .chart-axis { stroke: var(--line); stroke-width: 1; }
   .chart-lbl { fill: var(--muted); font-size: 11px; text-anchor: end; }
   .chart-bar { fill: var(--accent); opacity: .82; }
   .chart-xlbl { fill: var(--muted); font-size: 11px; }
   .chart-xlbl.endlbl { text-anchor: end; }
-  /* view-mode switcher */
   .view-modes { display: flex; gap: 6px; margin-bottom: 14px; }
   .mode-btn { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 5px 13px; font: inherit; font-size: 12.5px; color: var(--muted); cursor: pointer; }
   .mode-btn.active { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); }
-  /* asset hierarchy tree */
   .tree { font-size: 13px; line-height: 1.5; }
   .tree-node { padding: 3px 6px; white-space: nowrap; cursor: pointer; border-radius: 5px; }
   .tree-node:hover { background: var(--accent-soft); }
   .tree-name { font-weight: 550; }
-  .tree-desc { color: var(--muted); }
   .tree-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--muted); margin-right: 9px; vertical-align: middle; }
   .tree-dot.on { background: var(--accent); border-color: var(--accent); }
   .tree-badge { color: var(--muted); font-size: 11px; }
-  /* asset dashboard */
-  .ad-name { font-size: 21px; font-weight: 650; margin-top: 6px; }
+  .ad-name { font-size: 19px; font-weight: 650; margin-top: 2px; }
   .ad-desc { color: var(--muted); font-size: 13px; margin-top: 3px; }
-  .ad-section { font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; margin: 24px 0 10px; }
+  .ad-section { font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; margin: 22px 0 10px; }
   .ad-empty { color: var(--muted); font-style: italic; font-size: 13px; }
-  .sens-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
-  .sens-row { border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; cursor: pointer; background: var(--panel); transition: border-color .12s, background .12s; }
+  .sens-list { display: grid; grid-template-columns: 1fr; gap: 8px; }
+  .sens-row { border: 1px solid var(--line); border-radius: 9px; padding: 9px 12px; cursor: pointer; background: var(--panel); transition: border-color .12s, background .12s; }
   .sens-row:hover { border-color: var(--accent); background: var(--accent-soft); }
   .sens-n { font-size: 12.5px; font-weight: 500; }
   .sens-u { color: var(--muted); font-size: 12px; }
-  .issue-card { border: 1px solid var(--line); border-left: 3px solid var(--line); border-radius: 9px; padding: 10px 12px; cursor: pointer; background: var(--panel); transition: background .12s; }
+  .issue-card { border: 1px solid var(--line); border-left: 3px solid var(--line); border-radius: 9px; padding: 9px 12px; cursor: pointer; background: var(--panel); transition: background .12s; }
   .issue-card:hover { background: var(--accent-soft); }
   .issue-card.sev-amber { border-left-color: #d9902a; }
   .issue-card.sev-blue { border-left-color: var(--accent); }
-  /* document viewer lens */
-  .doc-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-top: 12px; }
-  .doc-item { border: 1px solid var(--line); border-radius: 10px; padding: 14px; cursor: pointer; background: var(--panel); transition: border-color .12s, background .12s; }
+  .doc-gallery { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+  .doc-item { border: 1px solid var(--line); border-radius: 10px; padding: 13px; cursor: pointer; background: var(--panel); transition: border-color .12s, background .12s; }
   .doc-item:hover { border-color: var(--accent); background: var(--accent-soft); }
   .doc-name { font-size: 13px; font-weight: 550; word-break: break-all; }
   .doc-type { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
-  .doc-back { color: var(--accent); cursor: pointer; font-size: 13px; margin-bottom: 12px; display: inline-block; }
-  .doc-frame { width: 100%; height: 78vh; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+  .doc-frame { width: 100%; height: 74vh; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
   .doc-img { max-width: 100%; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
 </style>
 
-<!-- one header over everything: brand · what the agent is doing · search · link -->
 <header class="top">
   <div class="brand">
     <svg width="21" height="21" viewBox="0 0 24 24" aria-hidden="true">
@@ -165,50 +174,54 @@
     </svg>
     Vardøger
   </div>
-  <div class="agent-strip" id="agent-strip">
-    <span class="now-dot"></span>
-    <span id="agent-now-text">idle</span>
-    <span id="agent-act"></span>
-    <span id="agent-plan"></span>
-  </div>
-  <input id="search" class="search-box" placeholder="Search the twin…" autocomplete="off">
+  <div class="chips" id="stars-root"></div>
+  <div class="chips" id="recents-root"></div>
   <div class="status" id="status"><span class="dot"></span><span id="statustext">connecting…</span></div>
 </header>
 
-<div class="app">
-  <!-- concept 1: the conversation — the agent drives, shows, and asks here -->
+<div class="app" id="app">
+  <!-- the conversation: front and center, time as the vertical axis -->
   <section class="conv">
     <div class="feedwrap" id="feedwrap"><div class="feed" id="feed-root"></div></div>
     <div class="working" id="working"><span class="spin"></span> the agent is thinking…</div>
     <div class="composer" id="composer">
       <div class="composer-inner">
-        <textarea id="input" rows="1" placeholder="Reply to the agent, or point it at data…"></textarea>
+        <textarea id="input" rows="1" placeholder="Ask, steer, or point the agent at data…"></textarea>
         <button id="send" title="Send">↑</button>
       </div>
-      <div class="hint">The agent leads. You supply what it can't know — your goals, your data, your judgment.</div>
+    </div>
+    <!-- the status bar: what's running in the background — click to open the twin -->
+    <div class="statusbar" id="statusbar" title="Open the twin">
+      <span class="now-dot"></span>
+      <span id="agent-now-text">idle</span>
+      <span id="agent-act"></span>
+      <span id="agent-plan"></span>
+      <span id="status-open">the twin ▸</span>
     </div>
   </section>
 
-  <!-- concept 2: the twin — a board of lenses, empty at first, grown by the agent -->
-  <section class="twinpane">
-    <div class="board" id="board"><div id="board-root" class="board-grid"></div></div>
-    <div class="expand" id="expand" hidden>
-      <div class="expand-bar"><span id="expand-back">← the twin</span><span id="expand-title"></span></div>
-      <div id="explorer-root"></div>
-    </div>
-    <div id="skills-root" hidden></div>
-  </section>
+  <!-- the detail stack: everything you open lands here, columns push right -->
+  <div class="stack" id="stack"></div>
 </div>
+<div id="skills-root" hidden></div>
 
 <script>
 (() => {
   "use strict";
   // Thin host: keep Map<Key,Node>, apply the forward mutation IR (§11.3), send back
-  // the backward event stream (§11.4). Roots are pre-seeded from the static shell —
-  // including the two now-strip slots the agenda/activity folds setText into.
+  // the backward event stream (§11.4).  The detail stack's panel chrome (title /
+  // star / close) is client furniture; panel BODIES are registered as roots the
+  // server renders into with p<i>:-prefixed keys.
   const nodes = new Map();
-  ["feed-root", "board-root", "explorer-root", "skills-root", "agent-plan", "agent-act"]
+  ["feed-root", "skills-root", "agent-plan", "agent-act", "stars-root", "recents-root"]
     .forEach((id) => nodes.set(id, document.getElementById(id)));
+
+  // the twin board is a LIVE node: it exists detached from birth, grows as the agent
+  // works, and is simply adopted by a panel when opened (and orphaned on close).
+  const boardRoot = document.createElement("div");
+  boardRoot.id = "board-root";
+  boardRoot.className = "board-grid";
+  nodes.set("board-root", boardRoot);
 
   const feedwrap = document.getElementById("feedwrap");
   const statusEl = document.getElementById("status");
@@ -216,10 +229,9 @@
   const workingEl = document.getElementById("working");
   const input = document.getElementById("input");
   const sendBtn = document.getElementById("send");
-  const boardEl = document.getElementById("board");
-  const expandEl = document.getElementById("expand");
-  const expandTitle = document.getElementById("expand-title");
-  const agentStrip = document.getElementById("agent-strip");
+  const appEl = document.getElementById("app");
+  const stackEl = document.getElementById("stack");
+  const statusbar = document.getElementById("statusbar");
   const agentNowText = document.getElementById("agent-now-text");
 
   let ws;
@@ -234,10 +246,9 @@
       const msg = JSON.parse(e.data);
       if (msg.type === "mutations") { msg.batch.forEach(applyMutation); autoscroll(); }
       else if (msg.type === "status") {
-        // foreground turns show the in-feed spinner; all work pulses the now-strip
         const on = !!msg.working, bg = !!msg.background;
         workingEl.classList.toggle("on", on && !bg);
-        agentStrip.classList.toggle("on", on);
+        statusbar.classList.toggle("on", on);
         agentNowText.textContent = on ? (bg ? "working in the background" : "thinking") : "idle";
         autoscroll();
       }
@@ -248,30 +259,87 @@
   const SVG_NS = "http://www.w3.org/2000/svg";
   const SVG_TAGS = new Set(["svg", "path", "line", "text", "g", "circle", "rect", "polyline", "polygon"]);
 
-  // a tile (or in-lens link) opens: the board gives way to the expanded lens
-  function openExpand(title) {
-    boardEl.hidden = true;
-    expandEl.hidden = false;
-    expandTitle.textContent = title || "";
+  // ---- the detail stack (Miller columns) ----
+  const panels = []; // [{ title, ev, el, isBoard }]
+  function removeTopPanels(downTo) {
+    while (panels.length > downTo) {
+      const p = panels.pop();
+      if (p.isBoard) boardRoot.remove(); // detach, keep alive
+      p.el.remove();
+    }
+    appEl.classList.toggle("split", panels.length > 0);
   }
-  function closeExpand() {
-    expandEl.hidden = true;
-    boardEl.hidden = false;
+  function openPanel(i, title, ev) {
+    removeTopPanels(i);
+    const el = document.createElement("div");
+    el.className = "panel";
+    const head = document.createElement("div");
+    head.className = "panel-head";
+    const t = document.createElement("div");
+    t.className = "panel-title";
+    t.textContent = title || "";
+    const star = document.createElement("button");
+    star.className = "panel-btn";
+    star.title = "Star this page";
+    star.textContent = "☆";
+    star.addEventListener("click", () => { star.textContent = star.textContent === "☆" ? "★" : "☆"; send({ type: "star", title: title || "page", target: ev }); });
+    const close = document.createElement("button");
+    close.className = "panel-btn";
+    close.title = "Close";
+    close.textContent = "×";
+    const my = panels.length;
+    close.addEventListener("click", () => removeTopPanels(my));
+    head.append(t, star, close);
+    const body = document.createElement("div");
+    body.className = "panel-body";
+    el.append(head, body);
+    const isBoard = ev && ev.type === "open_board";
+    if (isBoard) body.appendChild(boardRoot);
+    else nodes.set(`panel:${i}:body`, body);
+    panels.push({ title, ev, el, isBoard });
+    stackEl.appendChild(el);
+    appEl.classList.add("split");
+    stackEl.scrollLeft = stackEl.scrollWidth;
   }
-  document.getElementById("expand-back").addEventListener("click", closeExpand);
+  // open anything: create the column, then ask the graph to render into it.
+  // (open_board is hosted client-side, but the event is still sent so the user's
+  //  action is captured raw and lands in recents like everything else.)
+  function openFromEv(i, title, ev) {
+    openPanel(i, title, ev);
+    send(Object.assign({}, ev, { panel: i, title: title || "" }));
+  }
+  statusbar.addEventListener("click", () => openFromEv(0, "The twin", { type: "open_board" }));
 
-  // wire the interactions the twin's rendered elements imply (all keyed by logical id)
+  // wire the interactions the rendered elements imply. In-panel keys arrive as
+  // p<i>:<key>; a link inside column i opens in column i+1 (mode switches replace).
   function wire(el, key) {
-    if (/^sr:[^:]+$/.test(key)) el.addEventListener("click", () => { const n = key.slice(3); openExpand(el.dataset.title || n); send({ type: "open_source", name: n }); });
-    else if (/^ln:[^:]+$/.test(key)) el.addEventListener("click", () => { const n = "lens:" + key.slice(3); openExpand(el.dataset.title || n); send({ type: "open_source", name: n }); });
-    else if (/^exp:r:\d+$/.test(key)) el.addEventListener("click", () => { if (el.dataset.series) { openExpand(el.dataset.label || "Sensor"); send({ type: "fetch", adapter: el.dataset.adapter || "cognite-datapoints", id: el.dataset.series, label: el.dataset.label || el.dataset.series }); } });
-    else if (key.startsWith("doc:") && !key.endsWith(":n") && !key.endsWith(":t")) el.addEventListener("click", () => { openExpand(key.slice(4)); send({ type: "open_document", name: key.slice(4) }); });
-    else if (key === "exp:back") el.addEventListener("click", () => { openExpand("documents"); send({ type: "open_source", name: "documents" }); });
-    else if (key.startsWith("mode:")) el.addEventListener("click", () => { const [, name, mode] = key.split(":"); openExpand(name); send({ type: "open_source", name, mode }); });
-    else if (/^tn:[^:]+$/.test(key)) el.addEventListener("click", () => { openExpand("Asset"); send({ type: "open_asset", id: key.slice(3) }); });
-    else if (/^sens:[^:]+$/.test(key)) el.addEventListener("click", () => { if (el.dataset.series) { openExpand(el.dataset.label || "Sensor"); send({ type: "fetch", adapter: el.dataset.adapter || "cognite-datapoints", id: el.dataset.series, label: el.dataset.label || el.dataset.series }); } });
-    else if (key === "ad:back") el.addEventListener("click", () => { openExpand("assets"); send({ type: "open_source", name: "assets", mode: "tree" }); });
-    else if (/^iss:[^:]+:\d+:\d+$/.test(key)) el.addEventListener("click", () => { openExpand("Asset"); send({ type: "open_asset", id: key.split(":")[1] }); });
+    const pm = /^p(\d+):(.+)$/.exec(key);
+    if (pm) {
+      const base = Number(pm[1]), k = pm[2];
+      if (/^tn:[^:]+$/.test(k)) el.addEventListener("click", () => {
+        const nm = el.querySelector(".tree-name, .sens-n");
+        openFromEv(base + 1, (nm ? nm.textContent : "Asset"), { type: "open_asset", id: k.slice(3) });
+      });
+      else if (/^sens:[^:]+$/.test(k)) el.addEventListener("click", () => { if (el.dataset.series) openFromEv(base + 1, el.dataset.label || "Sensor", { type: "fetch", adapter: el.dataset.adapter || "cognite-datapoints", id: el.dataset.series, label: el.dataset.label || el.dataset.series }); });
+      else if (/^exp:r:\d+$/.test(k)) el.addEventListener("click", () => { if (el.dataset.series) openFromEv(base + 1, el.dataset.label || "Sensor", { type: "fetch", adapter: el.dataset.adapter || "cognite-datapoints", id: el.dataset.series, label: el.dataset.label || el.dataset.series }); });
+      else if (k.startsWith("doc:") && !k.includes(":n") && !k.includes(":t")) el.addEventListener("click", () => openFromEv(base + 1, k.slice(4), { type: "open_document", name: k.slice(4) }));
+      else if (k.startsWith("mode:")) el.addEventListener("click", () => { const [, name, mode] = k.split(":"); openFromEv(base, panels[base] ? panels[base].title : name, { type: "open_source", name, mode }); });
+      else if (/^iss:[^:]+:\d+:\d+$/.test(k)) el.addEventListener("click", () => openFromEv(base + 1, "Asset", { type: "open_asset", id: k.split(":")[1] }));
+      return;
+    }
+    // board tiles live in whichever column hosts the board — open into the next one
+    const boardIdx = () => panels.findIndex((p) => p.isBoard);
+    if (/^sr:[^:]+$/.test(key)) el.addEventListener("click", () => { const b = boardIdx(); if (b < 0) return; const n = key.slice(3); openFromEv(b + 1, el.dataset.title || n, { type: "open_source", name: n }); });
+    else if (/^ln:[^:]+$/.test(key)) el.addEventListener("click", () => { const b = boardIdx(); if (b < 0) return; const n = "lens:" + key.slice(3); openFromEv(b + 1, el.dataset.title || n, { type: "open_source", name: n }); });
+    // a view card in the chat opens the same thing in depth (panel 0)
+    else if (/^item:\d+:h$/.test(key)) el.addEventListener("click", () => { if (el.dataset.ev) openFromEv(0, el.dataset.title || el.textContent, JSON.parse(el.dataset.ev)); });
+    // recents / starred chips in the header
+    else if (/^(rc|st):\d+$/.test(key)) el.addEventListener("click", () => { if (el.dataset.ev) openFromEv(0, el.dataset.title || "", JSON.parse(el.dataset.ev)); });
+    // tree nodes inside chat cards (unprefixed) open at panel 0
+    else if (/^tn:[^:]+$/.test(key)) el.addEventListener("click", () => {
+      const nm = el.querySelector(".tree-name");
+      openFromEv(0, (nm ? nm.textContent : "Asset"), { type: "open_asset", id: key.slice(3) });
+    });
   }
 
   function applyMutation(m) {
@@ -315,19 +383,6 @@
   input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = input.scrollHeight + "px"; });
   input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitMessage(); } });
   sendBtn.addEventListener("click", submitMessage);
-
-  // search — the parametrized lens (debounced); an empty query returns to the board
-  const searchBox = document.getElementById("search");
-  let searchTimer;
-  searchBox.addEventListener("input", () => {
-    clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => {
-      const q = searchBox.value.trim();
-      if (!q) { closeExpand(); return; }
-      openExpand("Search");
-      send({ type: "search", query: q });
-    }, 220);
-  });
 
   connect();
 })();
