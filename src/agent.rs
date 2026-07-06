@@ -206,7 +206,7 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<()>) -> O
             if thoughts > 1 {
                 continue; // don't spin on thinking; re-prompt for an action
             }
-        } else if !emitted.insert(tool.clone()) {
+        } else if !emitted.insert(dedup_key(&tool)) {
             // an exact repeat: never apply it twice — one duplicate card per repeat
             // is exactly the bug this prevents.  Two repeats = the model is stuck.
             eprintln!("[agent{}] repeat suppressed: {}", if background { "·bg" } else { "" }, preview(&tool));
@@ -243,6 +243,29 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<()>) -> O
 }
 
 const IDLE_TOOL: &str = r#"{"tool":"idle","args":{}}"#;
+
+/// What makes two tool calls "the same" within one turn.  Exact string equality is
+/// too weak — the model re-emits the same `show` with a reworded title and floods
+/// the feed with near-identical cards.  So the key is the tool plus its TARGET
+/// (source/series/name); presentation args (title, columns, limit) don't count.
+fn dedup_key(tool_json: &str) -> String {
+    let v: serde_json::Value = match serde_json::from_str(tool_json) {
+        Ok(v) => v,
+        Err(_) => return tool_json.to_string(),
+    };
+    let name = v["tool"].as_str().unwrap_or("");
+    let a = &v["args"];
+    let s = |k: &str| a[k].as_str().unwrap_or("").to_string();
+    match name {
+        "show" => format!("show:{}:{}:{}", s("view"), if s("source").is_empty() { s("name") } else { s("source") }, s("series")),
+        "inspect" => format!("inspect:{}", s("source")),
+        "make_lens" => format!("make_lens:{}", s("name").to_lowercase()),
+        "describe" => format!("describe:{}", s("source")),
+        "read_source" => format!("read_source:{}", s("path")),
+        "record_profile" => format!("record_profile:{}", s("field")),
+        _ => tool_json.to_string(),
+    }
+}
 
 /// If the last user message carries a data-file path and no source is mounted yet,
 /// return a hard instruction to mount it — coaxing a small local model past the stall.

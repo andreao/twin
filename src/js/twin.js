@@ -248,20 +248,26 @@ const T = (() => {
     const chartable = name === 'timeseries'; // a sensor row → chart its datapoints
     renderModes(V, name, 'table');
     let i = 1;
-    V.add('div', 'exp:note', null, i++); V.set('exp:note', 'class', 'explorer-note');
-    V.text('exp:note', `${residenceLabel(s)} · ${cols.length} columns · showing ${rows.length} of ${s.rowcount} rows${chartable ? ' · click a sensor to chart it' : ''}`);
-    // deep inspection of a derived lens: what it is, how the data got here (the
-    // composition chain, walked over the from-links), and the exact code of this hop
+    // deep inspection of a derived lens: its description, then the derivation chain
+    // as a quiet breadcrumb (walked over the from-links), with the code of this hop
+    // behind a subtle {…} toggle — never a slab of code by default.
     if (s.code) {
       if (s.description) {
         V.add('div', 'exp:desc', null, i++); V.set('exp:desc', 'class', 'src-desc');
         V.text('exp:desc', s.description);
       }
-      V.add('div', 'exp:lin', null, i++); V.set('exp:lin', 'class', 'explorer-note');
-      V.text('exp:lin', `how this data is derived:  ${chainOf(name).join('  →  ')}`);
-      V.add('div', 'exp:code', null, i++); V.set('exp:code', 'class', 'lens-code');
+      V.add('div', 'exp:lin', null, i++); V.set('exp:lin', 'class', 'lens-chain');
+      const parts = chainOf(name);
+      parts.forEach((p, pi) => {
+        if (pi) { V.add('span', `exp:lsep${pi}`, 'exp:lin', pi * 2 - 1); V.set(`exp:lsep${pi}`, 'class', 'chain-sep'); V.text(`exp:lsep${pi}`, '→'); }
+        V.add('span', `exp:lp${pi}`, 'exp:lin', pi * 2); V.set(`exp:lp${pi}`, 'class', 'chain-part' + (pi === parts.length - 1 ? ' here' : '')); V.text(`exp:lp${pi}`, p);
+      });
+      V.add('button', 'exp:codebtn', 'exp:lin', parts.length * 2); V.set('exp:codebtn', 'class', 'code-toggle'); V.text('exp:codebtn', '{…} code');
+      V.add('div', 'exp:code', null, i++); V.set('exp:code', 'class', 'lens-code'); V.set('exp:code', 'hidden', 'true');
       V.text('exp:code', s.code);
     }
+    V.add('div', 'exp:note', null, i++); V.set('exp:note', 'class', 'explorer-note');
+    V.text('exp:note', `${residenceLabel(s)} · ${cols.length} columns · showing ${rows.length} of ${s.rowcount} rows${chartable ? ' · click a sensor to chart it' : ''}`);
     V.add('table', 'exp:tbl', null, i);
     V.add('thead', 'exp:thead', 'exp:tbl', 0);
     V.add('tr', 'exp:htr', 'exp:thead', 0);

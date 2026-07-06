@@ -339,8 +339,10 @@ fn agent_authors_a_lens_with_lineage() {
     g.twin_event(r#"{"type":"open_source","name":"lens:hot-gearboxes"}"#);
     let deep = g.twin_from(0);
     assert!(deep.contains("exp:tbl"), "lens not browsable as a table");
-    assert!(deep.contains("how this data is derived"), "no derivation chain in the expanded view");
-    assert!(deep.contains("return rows.filter"), "code not shown on deep inspection");
+    assert!(deep.contains("chain-part"), "no derivation breadcrumb in the expanded view");
+    assert!(deep.contains("code-toggle"), "no code toggle in the expanded view");
+    assert!(deep.contains("return rows.filter"), "code not present behind the toggle");
+    assert!(deep.contains(r#""name":"hidden""#), "code block should start hidden");
     let seen = g.twin_perceive();
     assert!(seen.contains("lens:hot-gearboxes"), "lens not perceived: {seen}");
 }
@@ -360,10 +362,10 @@ fn lenses_compose_and_the_chain_is_shown() {
     g.twin_event(r#"{"type":"open_source","name":"lens:critical-gearboxes"}"#);
     let deep = g.twin_from(0);
     // the chain reads root → hop → this, in human titles
-    assert!(
-        deep.contains("turbines  →  Hot gearboxes  →  Critical gearboxes"),
-        "derivation chain missing or wrong: {deep}"
-    );
+    // the breadcrumb walks root → hop → this, in human titles, this-hop emphasized
+    assert!(deep.contains("turbines"), "chain root missing");
+    assert!(deep.contains("Hot gearboxes"), "chain middle hop missing");
+    assert!(deep.contains("chain-part here") && deep.contains("Critical gearboxes"), "chain endpoint missing: {deep}");
     assert!(deep.contains("WT-03") , "composed lens rows wrong");
 }
 

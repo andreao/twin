@@ -31,7 +31,9 @@
 
   /* ---- chat front and center; detail stack slides in on the right ---- */
   .app { flex: 1; min-height: 0; display: flex; overflow: hidden; }
-  .conv { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--panel); flex: 1; }
+  .conv { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--panel); flex: 1; }
+  .conv .conv-rz { display: none; }
+  .app.split .conv .conv-rz { display: block; }
   .app.split .conv { flex: none; width: 464px; border-right: 1px solid var(--line); }
   .feedwrap { flex: 1; min-height: 0; overflow-y: auto; }
   .feed { max-width: 760px; margin: 0 auto; padding: 22px 24px 8px; display: flex; flex-direction: column; gap: 4px; }
@@ -86,13 +88,20 @@
   /* ---- the detail stack: horizontal columns, Finder-style ---- */
   .stack { flex: 1; min-width: 0; display: none; overflow-x: auto; overflow-y: hidden; background: var(--bg); }
   .app.split .stack { display: flex; }
-  .panel { width: 520px; flex: none; min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); background: var(--bg); }
-  .panel:last-child { flex: 1 0 520px; max-width: 860px; }
+  .panel { position: relative; width: 520px; flex: none; min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); background: var(--bg); }
+  .panel:last-child { flex: 1 0 auto; border-right: none; }
   .panel-head { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--line); flex: none; background: var(--panel); }
   .panel-title { font-weight: 600; font-size: 13.5px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .panel-btn { border: none; background: none; color: var(--muted); font: inherit; font-size: 14px; cursor: pointer; padding: 2px 6px; border-radius: 6px; flex: none; }
   .panel-btn:hover { background: var(--accent-soft); color: var(--accent); }
-  .panel-body { flex: 1; min-height: 0; overflow: auto; padding: 14px 16px; }
+  /* sticky table headers pin flush to the top: the scroller has NO top padding
+     (padding there leaves a see-through strip above a sticky th) */
+  .panel-body { flex: 1; min-height: 0; overflow: auto; padding: 0 16px 16px; }
+  .panel-body > *:first-child { margin-top: 14px; }
+  .panel-body > table:first-child { margin-top: 0; }
+  /* draggable divider on every column's right edge (and the chat's) */
+  .panel-rz, .conv-rz { position: absolute; top: 0; right: -3px; width: 7px; height: 100%; cursor: col-resize; z-index: 6; }
+  .panel-rz:hover, .conv-rz:hover { background: linear-gradient(to right, transparent 2px, var(--accent) 3px, transparent 5px); }
 
   /* board (inside its panel): the twin as a grid of lens tiles */
   .board-grid { display: grid; grid-template-columns: 1fr; gap: 10px; align-items: start; }
@@ -107,7 +116,14 @@
   .src-desc { font-size: 12.5px; color: var(--ink); margin-top: 5px; line-height: 1.45; }
   .src-d { font-size: 11.5px; color: var(--muted); margin-top: 7px; }
   .tile-h { font-size: 13.5px; font-weight: 600; margin-bottom: 8px; }
-  .lens-code { font-family: ui-monospace, "SF Mono", monospace; font-size: 10.5px; background: var(--bg); border: 1px solid var(--line); padding: 7px 9px; border-radius: 8px; margin-top: 10px; white-space: pre-wrap; word-break: break-word; color: #6b665e; max-height: 140px; overflow-y: auto; }
+  .lens-code { font-family: ui-monospace, "SF Mono", monospace; font-size: 11px; line-height: 1.6; background: #f4f2ee; border: 1px solid var(--line); padding: 10px 12px; border-radius: 8px; margin: 2px 0 12px; white-space: pre-wrap; word-break: break-word; color: #55504a; max-height: 200px; overflow-y: auto; }
+  /* the derivation breadcrumb: quiet, one type size, code behind a toggle */
+  .lens-chain { font-size: 12px; color: var(--muted); margin: 6px 0 12px; display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; }
+  .chain-part { color: var(--ink); }
+  .chain-part.here { font-weight: 600; }
+  .chain-sep { color: var(--muted); }
+  .code-toggle { margin-left: 8px; border: 1px solid var(--line); background: var(--panel); border-radius: 7px; padding: 1px 9px; font-family: ui-monospace, "SF Mono", monospace; font-size: 10.5px; color: var(--muted); cursor: pointer; }
+  .code-toggle:hover { border-color: var(--accent); color: var(--accent); }
   .fnd-list { max-height: 300px; overflow-y: auto; }
   .fnd { border: 1px solid var(--line); border-left: 3px solid var(--line); border-radius: 9px; padding: 8px 10px; margin: 6px 0; font-size: 12.5px; background: var(--bg); }
   .fnd.sev-info { border-left-color: var(--accent); }
@@ -231,6 +247,30 @@
   const sendBtn = document.getElementById("send");
   const appEl = document.getElementById("app");
   const stackEl = document.getElementById("stack");
+  const convEl = document.querySelector(".conv");
+
+  // draggable column dividers — plain client furniture, no state in the graph
+  function makeResizable(el, cls) {
+    const rz = document.createElement("div");
+    rz.className = cls;
+    rz.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      const startX = e.clientX, startW = el.getBoundingClientRect().width;
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+      const move = (ev) => { el.style.width = Math.max(320, startW + ev.clientX - startX) + "px"; el.style.flex = "none"; };
+      const up = () => {
+        window.removeEventListener("mousemove", move);
+        window.removeEventListener("mouseup", up);
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+      };
+      window.addEventListener("mousemove", move);
+      window.addEventListener("mouseup", up);
+    });
+    el.appendChild(rz);
+  }
+  makeResizable(convEl, "conv-rz");
   const statusbar = document.getElementById("statusbar");
   const agentNowText = document.getElementById("agent-now-text");
 
@@ -311,6 +351,7 @@
     const body = document.createElement("div");
     body.className = "panel-body";
     el.append(head, body);
+    makeResizable(el, "panel-rz");
     const isBoard = ev && ev.type === "open_board";
     if (isBoard) body.appendChild(boardRoot);
     else nodes.set(`panel:${i}:body`, body);
@@ -341,6 +382,7 @@
       else if (/^sens:[^:]+$/.test(k)) el.addEventListener("click", () => { if (el.dataset.series) openFromEv(base + 1, el.dataset.label || "Sensor", { type: "fetch", adapter: el.dataset.adapter || "cognite-datapoints", id: el.dataset.series, label: el.dataset.label || el.dataset.series }); });
       else if (/^exp:r:\d+$/.test(k)) el.addEventListener("click", () => { if (el.dataset.series) openFromEv(base + 1, el.dataset.label || "Sensor", { type: "fetch", adapter: el.dataset.adapter || "cognite-datapoints", id: el.dataset.series, label: el.dataset.label || el.dataset.series }); });
       else if (k.startsWith("doc:") && !k.includes(":n") && !k.includes(":t")) el.addEventListener("click", () => openFromEv(base + 1, k.slice(4), { type: "open_document", name: k.slice(4) }));
+      else if (k === "exp:codebtn") el.addEventListener("click", () => { const code = nodes.get(`p${base}:exp:code`); if (code) code.hidden = !code.hidden; });
       else if (k.startsWith("mode:")) el.addEventListener("click", () => { const [, name, mode] = k.split(":"); openFromEv(base, panels[base] ? panels[base].title : name, { type: "open_source", name, mode }); });
       else if (/^iss:[^:]+:\d+:\d+$/.test(k)) el.addEventListener("click", () => openFromEv(base + 1, "Asset", { type: "open_asset", id: k.split(":")[1] }));
       return;
