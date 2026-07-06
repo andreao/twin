@@ -121,7 +121,8 @@ const T = (() => {
         if (s.cardSeq) {
           TWIN_MUT.push({ op: 'setText', key: `item:${s.cardSeq}:h`, text: `Mounted ${s.title}` });
           TWIN_MUT.push({ op: 'setAttr', key: `item:${s.cardSeq}:h`, name: 'data-title', value: s.title });
-          TWIN_MUT.push({ op: 'setText', key: `item:${s.cardSeq}:d`, text: mountCardSub(s) });
+          TWIN_MUT.push({ op: 'setText', key: `item:${s.cardSeq}:d`, text: s.description || '' });
+          TWIN_MUT.push({ op: 'setText', key: `item:${s.cardSeq}:m`, text: mountMeta(s) });
         }
       }
     }
@@ -169,7 +170,7 @@ const T = (() => {
         title: meta.title || name, description: meta.description || '' };
       sources.set('documents', info);
       sourcesPanel.set('documents', info);
-      info.cardSeq = workCard(`Mounted ${info.title}`, mountCardSub(info), { type: 'open_source', name: 'documents' });
+      info.cardSeq = workCard(`Mounted ${info.title}`, info.description, mountMeta(info), { type: 'open_source', name: 'documents' });
       return;
     }
     let id = sourceIds.get(name);
@@ -185,23 +186,22 @@ const T = (() => {
     };
     sources.set(name, info);
     sourcesPanel.set(name, info);
-    info.cardSeq = workCard(`Mounted ${info.title}`, mountCardSub(info), { type: 'open_source', name });
+    info.cardSeq = workCard(`Mounted ${info.title}`, info.description, mountMeta(info), { type: 'open_source', name });
   }
 
-  // What a mount card says under its title: the description (once known) plus the
-  // honest residence facts — the same line the tile shows.
-  function mountCardSub(s) {
-    const meta = s.kind === 'documents'
+  // The quiet facts line of a mount card — separate from the description, so prose
+  // never runs into numbers.
+  function mountMeta(s) {
+    return s.kind === 'documents'
       ? `${(s.docs || []).length} files · ${residenceLabel(s)}`
       : `${s.rowcount} rows · ${Object.keys(s.schema || {}).length} columns · ${residenceLabel(s)}`;
-    return s.description ? `${s.description}  ·  ${meta}` : meta;
   }
 
   // A compact ACTION CARD in the chat: work that was done (by the agent or the
   // system on its behalf), titled like a human would say it, openable when it
   // points at something.  This is how background work reads as history from 0.
-  function workCard(title, sub, openEv, tone) {
-    const sq = append('card', { text: title, sub: sub || '', tone: tone || '' });
+  function workCard(title, sub, meta, openEv, tone) {
+    const sq = append('card', { text: title, sub: sub || '', meta: meta || '', tone: tone || '' });
     if (openEv) {
       TWIN_MUT.push({ op: 'setAttr', key: `item:${sq}:h`, name: 'class', value: 'card-title openable' });
       TWIN_MUT.push({ op: 'setAttr', key: `item:${sq}:h`, name: 'data-title', value: String(title) });
@@ -551,8 +551,8 @@ const T = (() => {
   }
 
   function residenceLabel(s) {
-    if (s.residence === 'mounted') return 'federated · live (read-through, not copied)';
-    if (s.residence === 'mounted-partial') return `federated · ${s.materialized} of ${s.rowcount} synced local`;
+    if (s.residence === 'mounted') return 'federated · live';
+    if (s.residence === 'mounted-partial') return `federated · ${s.materialized} of ${s.rowcount} local`;
     return s.residence;
   }
 
@@ -601,7 +601,7 @@ const T = (() => {
     G.submit(findingsSrc, ZSet.fromRows([rec({ id: findingSeq, severity: sev, text, source: src })]), prov('agent'));
     // findings are DONE work — they read as a card in the chat history too
     const sevTitle = sev === 'critical' ? 'Critical issue' : sev === 'warn' ? 'Data issue' : 'Noted';
-    workCard(sevTitle, text + (src ? `  ·  in ${srcTitle(src)}` : ''),
+    workCard(sevTitle, text, src ? `in ${srcTitle(src)}` : '',
       src && sources.has(src) ? { type: 'open_source', name: src } : null, `sev-${sev}`);
     logActivity(`finding (${sev}): ${text}`);
   }

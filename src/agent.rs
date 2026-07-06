@@ -227,9 +227,9 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<()>) -> O
             break;
         }
     }
-    // a FOREGROUND turn always ends with something for the user (never silent);
-    // background turns are allowed to finish quietly — their trace is the activity log.
-    if !background && !said {
+    // A FOREGROUND turn must never end with NOTHING — but if it already produced
+    // visible work (cards, views, lenses), a canned "what next?" line is just jank.
+    if !background && !said && !acted {
         emit(tx, &say_json("What would you like to do next?"));
     }
     tx.send(Cmd::Status { working: false, background }).ok();

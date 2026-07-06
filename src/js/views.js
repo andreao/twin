@@ -38,6 +38,10 @@ class Feed {
       this._emit({ op: 'create', key: dk, tag: 'div', parent: key, index: 1 });
       this._emit({ op: 'setAttr', key: dk, name: 'class', value: 'card-sub' });
       this._emit({ op: 'setText', key: dk, text: item.sub || '' });
+      const mk = `${key}:m`;
+      this._emit({ op: 'create', key: mk, tag: 'div', parent: key, index: 2 });
+      this._emit({ op: 'setAttr', key: mk, name: 'class', value: 'card-meta' });
+      this._emit({ op: 'setText', key: mk, text: item.meta || '' });
     } else if (item.kind === 'view') {
       // a rich view the agent renders into the conversation: a titled card with an
       // empty body the app fills with a table / hierarchy / document lens (§11.16).
