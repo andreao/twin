@@ -186,7 +186,7 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
     let mut emitted: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut suppressed = false;
     let mut stuck = 0;
-    let mut idle_overridden = false;
+    let mut idle_overrides = 0;
     let mut idle_item: Option<String> = None;
     let mut lens_notes: Vec<String> = Vec::new();
     for _ in 0..MAX_STEPS {
@@ -250,11 +250,11 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
         let name = tool_name(&tool);
         if name == "idle" {
             // idling with an open agenda is a model failure, not a fact about the
-            // world — override it once with a hard rail before accepting.
-            if !idle_overridden {
+            // world — override it (twice) with a hard rail before accepting.
+            if idle_overrides < 2 {
                 if let Some(item) = agenda_head(&ctx) {
                     eprintln!("[agent{}] idle overridden — agenda has: {item}", if background { "·bg" } else { "" });
-                    idle_overridden = true;
+                    idle_overrides += 1;
                     idle_item = Some(item);
                     continue;
                 }

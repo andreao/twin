@@ -83,15 +83,18 @@
   .fnd.resolved { opacity: .5; }
   .fnd.resolved > div:first-child { text-decoration: line-through; }
 
-  /* the Agent page: agenda checklist + recent work log */
-  .ag-row { display: flex; gap: 10px; align-items: baseline; padding: 6px 8px; border-radius: 8px; font-size: 13.5px; }
-  .ag-row:hover { background: var(--panel); }
+  /* the Agent page: agenda checklist + recent work log, in quiet blocks */
+  .agent-block { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 6px 10px; }
+  .ag-row { display: flex; gap: 10px; align-items: baseline; padding: 7px 8px; font-size: 13.5px; border-bottom: 1px solid var(--line); }
+  .ag-row:last-child { border-bottom: none; }
   .ag-s { flex: none; color: var(--muted); }
   .ag-row.active .ag-s { color: var(--accent); }
   .ag-row.done { opacity: .55; }
   .ag-row.done .ag-t { text-decoration: line-through; }
-  .act-row { font-size: 12px; color: var(--muted); padding: 4px 8px; line-height: 1.5; border-bottom: 1px solid var(--line); }
+  .act-row { display: flex; gap: 12px; align-items: baseline; font-size: 12.5px; padding: 6px 8px; line-height: 1.5; border-bottom: 1px solid var(--line); }
   .act-row:last-child { border-bottom: none; }
+  .act-verb { flex: none; width: 68px; color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; padding-top: 1px; }
+  .act-text { flex: 1; min-width: 0; color: var(--ink); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
   .view-body { min-height: 0; }
   .view-scroll { overflow-x: auto; max-height: 44vh; overflow-y: auto; }
   .feed-item.view .doc-frame { width: 100%; height: 44vh; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
@@ -121,9 +124,7 @@
   .now-dot { width: 7px; height: 7px; border-radius: 50%; background: #ccc; flex: none; align-self: center; }
   .statusbar.on .now-dot { background: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
   @keyframes pulse { 50% { opacity: .35; } }
-  #agent-now-text { flex: none; }
-  #agent-act { max-width: 44ch; }
-  #agent-plan { max-width: 36ch; color: #7a4a38; }
+  #status-line { flex: 1; min-width: 0; }
   #status-open { flex: none; margin-left: auto; color: var(--muted); }
 
   /* ---- the detail stack: horizontal columns, Finder-style ---- */
@@ -254,9 +255,9 @@
     <!-- the status bar: what's running in the background — click to open the twin -->
     <div class="statusbar" id="statusbar" title="See what the agent is doing">
       <span class="now-dot"></span>
-      <span id="agent-now-text">idle</span>
-      <span id="agent-act"></span>
-      <span id="agent-plan"></span>
+      <span id="status-line">idle</span>
+      <span id="agent-act" hidden></span>
+      <span id="agent-plan" hidden></span>
       <span id="agent-doing" hidden></span>
       <span id="status-open">the twin ▸</span>
     </div>
@@ -291,14 +292,22 @@
   const workingEl = document.getElementById("working");
   const workingText = document.getElementById("working-text");
   const workingTitle = document.getElementById("working-title");
+  const statusLine = document.getElementById("status-line");
   let statusOn = false, statusBg = false;
-  // the in-progress card: title = the ACTIVE agenda item (what it's working on),
-  // sub = the latest activity note — refreshed live as folds update the slots
+  // one composed sentence for the strip and the in-progress card, from the fold
+  // slots (active item / last action / next item) — a single truncation point
   function refreshWorking() {
-    if (!statusOn) return;
     const doing = document.getElementById("agent-doing").textContent;
-    workingTitle.textContent = statusBg ? (doing || "Working on the twin") : "Thinking";
-    workingText.textContent = document.getElementById("agent-act").textContent;
+    const act = document.getElementById("agent-act").textContent;
+    const plan = document.getElementById("agent-plan").textContent;
+    if (statusOn) {
+      statusLine.textContent = statusBg ? ((doing || "working") + (act ? " — " + act : "")) : "thinking…";
+      workingTitle.textContent = statusBg ? (doing || "Working on the twin") : "Thinking";
+      workingText.textContent = act;
+    } else {
+      // between turns: "waiting" while there's open work; "idle" only when there's none
+      statusLine.textContent = (plan || doing) ? `waiting · ${plan || "on: " + doing}` : "idle";
+    }
   }
   const input = document.getElementById("input");
   const sendBtn = document.getElementById("send");
@@ -329,7 +338,6 @@
   }
   makeResizable(convEl, "conv-rz");
   const statusbar = document.getElementById("statusbar");
-  const agentNowText = document.getElementById("agent-now-text");
 
   // On (re)connect the server replays the FULL mutation log — so the DOM must be
   // reset to zero first, or every reconnect (server restart, network blip) would
@@ -380,7 +388,6 @@
         statusOn = !!msg.working; statusBg = !!msg.background;
         workingEl.classList.toggle("on", statusOn);
         statusbar.classList.toggle("on", statusOn);
-        agentNowText.textContent = statusOn ? (statusBg ? "working" : "thinking") : "idle";
         refreshWorking();
         autoscroll();
       }

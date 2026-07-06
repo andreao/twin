@@ -626,8 +626,10 @@ const T = (() => {
   }
   let actSeq = 0;
   function logActivity(text) {
+    const t = String(text);
+    if (activityTail.length && activityTail[activityTail.length - 1] === t) return; // no stutter
     actSeq += 1;
-    G.submit(activitySrc, ZSet.fromRows([rec({ seq: actSeq, text: String(text) })]), prov('agent'));
+    G.submit(activitySrc, ZSet.fromRows([rec({ seq: actSeq, text: t })]), prov('agent'));
   }
   let findingSeq = 0;
   function addFinding(a) {
@@ -685,7 +687,7 @@ const T = (() => {
     const openCount = [...agenda.values()].filter((a) => a.status !== 'done').length;
     V.text('ag:note', `what the agent is working on, planning, and recently did · ${lenses.size} lenses authored · ${[...findings.values()].filter((f) => f.status !== 'resolved').length} open findings`);
     V.add('div', 'ag:h1', null, 1); V.set('ag:h1', 'class', 'ad-section'); V.text('ag:h1', `Agenda — ${openCount} open`);
-    V.add('div', 'ag:list', null, 2);
+    V.add('div', 'ag:list', null, 2); V.set('ag:list', 'class', 'agent-block');
     if (!agenda.size) { V.add('div', 'ag:none', 'ag:list', 0); V.set('ag:none', 'class', 'ad-empty'); V.text('ag:none', 'no agenda yet — the agent plans its own work here'); }
     let i = 0;
     for (const [id, a] of agenda) {
@@ -695,11 +697,28 @@ const T = (() => {
       V.add('span', `${k}:t`, k, 1); V.set(`${k}:t`, 'class', 'ag-t'); V.text(`${k}:t`, a.text);
     }
     V.add('div', 'ag:h2', null, 3); V.set('ag:h2', 'class', 'ad-section'); V.text('ag:h2', 'Recent activity');
-    V.add('div', 'ag:acts', null, 4);
+    V.add('div', 'ag:acts', null, 4); V.set('ag:acts', 'class', 'agent-block');
     if (!activityTail.length) { V.add('div', 'ag:qn', 'ag:acts', 0); V.set('ag:qn', 'class', 'ad-empty'); V.text('ag:qn', 'quiet so far'); }
-    activityTail.slice().reverse().forEach((t, ai) => {
+    // newest first, duplicates collapsed, each row split verb | what — one shape
+    const VERBS = [
+      [/^authored lens\s*/, 'built'], [/^inspected\s*/, 'inspected'], [/^described\s*/, 'described'],
+      [/^finding \((\w+)\):\s*/, 'flagged'], [/^done:\s*/, 'finished'], [/^lens\s*/, 'lens'],
+      [/^chart\s*/, 'chart'],
+    ];
+    const shown = new Set();
+    let ai = 0;
+    activityTail.slice().reverse().forEach((t) => {
+      if (shown.has(t)) return;
+      shown.add(t);
+      let verb = '·', rest = t;
+      for (const [re, v] of VERBS) {
+        if (re.test(t)) { verb = v; rest = t.replace(re, ''); break; }
+      }
       const k = `ag:act${ai}`;
-      V.add('div', k, 'ag:acts', ai); V.set(k, 'class', 'act-row'); V.text(k, t);
+      V.add('div', k, 'ag:acts', ai); V.set(k, 'class', 'act-row');
+      V.add('span', `${k}:v`, k, 0); V.set(`${k}:v`, 'class', 'act-verb'); V.text(`${k}:v`, verb);
+      V.add('span', `${k}:t`, k, 1); V.set(`${k}:t`, 'class', 'act-text'); V.text(`${k}:t`, rest);
+      ai++;
     });
   }
 
@@ -821,9 +840,10 @@ const T = (() => {
       rows.forEach((r) => { const v = String(r[c0]); if (seen.has(v)) dup += 1; else seen.add(v); });
       if (dup) issues.push(`${c0}: ${dup} duplicates`);
     }
-    logActivity(`inspected “${src}”: ${rows.length} rows, ${cols.length} cols`
-      + (stats.length ? ` · ranges ${stats.slice(0, 4).join('; ')}` : '')
-      + (issues.length ? ` · gaps ${issues.slice(0, 5).join('; ')}` : ' · no empties'));
+    const more = (arr, n) => arr.slice(0, n).join(', ') + (arr.length > n ? ` +${arr.length - n} more` : '');
+    logActivity(`inspected “${src}” — ${rows.length} rows · ${cols.length} cols`
+      + (stats.length ? ` · ${more(stats, 2)}` : '')
+      + (issues.length ? ` · gaps: ${more(issues, 3)}` : ' · no gaps'));
   }
 
   // ---- inline rich views (§11.6, §11.16): the AGENT communicates through visuals ----
