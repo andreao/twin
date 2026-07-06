@@ -623,6 +623,33 @@ const T = (() => {
     };
     roots.forEach((r) => emit(r, 0));
   }
+  // Inline chart card — the agent presenting a sensor IN the conversation.  Same
+  // §11.3 keys as every card (namespaced by v<seq>), points arrive from the host
+  // boundary (twin_show_chart) with their provenance noted on the card.
+  function chartInline(id, label, points, provenance) {
+    const sq = append('view', { text: label || id, view: 'chart' });
+    const b = vbuild(`item:${sq}:body`, `v${sq}`);
+    if (!points || !points.length) { b.add('div', 'note', null, 0); b.set('note', 'class', 'explorer-note'); b.text('note', 'no datapoints'); return; }
+    const W = 1000, H = 360, pad = 46;
+    const ts = points.map((p) => p[0]), vs = points.map((p) => p[1]);
+    const tmin = Math.min(...ts), tmax = Math.max(...ts), vmin = Math.min(...vs), vmax = Math.max(...vs);
+    const sx = (t) => pad + (tmax > tmin ? (t - tmin) / (tmax - tmin) : 0) * (W - 2 * pad);
+    const sy = (v) => (H - pad) - (vmax > vmin ? (v - vmin) / (vmax - vmin) : 0) * (H - 2 * pad);
+    let d = '';
+    points.forEach((p, i) => { d += (i ? 'L' : 'M') + sx(p[0]).toFixed(1) + ' ' + sy(p[1]).toFixed(1) + ' '; });
+    b.add('div', 'note', null, 0); b.set('note', 'class', 'explorer-note');
+    b.text('note', `${points.length} points · min ${fmtNum(vmin)} · max ${fmtNum(vmax)}${provenance ? ' · ' + provenance : ''}`);
+    b.add('svg', 'svg', null, 1); b.set('svg', 'viewBox', `0 0 ${W} ${H}`); b.set('svg', 'class', 'chart');
+    b.add('line', 'ax', 'svg', 0); b.set('ax', 'x1', pad); b.set('ax', 'y1', H - pad); b.set('ax', 'x2', W - pad); b.set('ax', 'y2', H - pad); b.set('ax', 'class', 'chart-axis');
+    b.add('line', 'ay', 'svg', 1); b.set('ay', 'x1', pad); b.set('ay', 'y1', pad); b.set('ay', 'x2', pad); b.set('ay', 'y2', H - pad); b.set('ay', 'class', 'chart-axis');
+    b.add('path', 'path', 'svg', 2); b.set('path', 'd', d.trim()); b.set('path', 'class', 'chart-line');
+    b.add('text', 'ymax', 'svg', 3); b.set('ymax', 'x', pad - 8); b.set('ymax', 'y', pad + 4); b.set('ymax', 'class', 'chart-lbl'); b.text('ymax', fmtNum(vmax));
+    b.add('text', 'ymin', 'svg', 4); b.set('ymin', 'x', pad - 8); b.set('ymin', 'y', H - pad); b.set('ymin', 'class', 'chart-lbl'); b.text('ymin', fmtNum(vmin));
+  }
+  function chartInlineMessage(label, msg) {
+    logActivity(`chart “${label}”: ${msg}`);
+  }
+
   function renderDocInto(root, pfx, name) {
     const b = vbuild(root, pfx);
     const ext = String(name).split('.').pop().toLowerCase();
@@ -778,7 +805,7 @@ const T = (() => {
 
   return {
     agentTool, event, perceive, mountSource, sourceError, installSkill,
-    chartSeries, chartMessage,
+    chartSeries, chartMessage, chartInline, chartInlineMessage,
     // the shared mutation log (§11.3): replaying [0..total) rebuilds the DOM exactly.
     total() { return TWIN_MUT.length; },
     from(n) { return JSON.stringify(TWIN_MUT.slice(n)); },

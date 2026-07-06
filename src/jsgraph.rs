@@ -102,12 +102,24 @@ impl JsGraph {
     /// each adapter owns its own domain specifics (endpoints, on-disk layout), so the
     /// core carries no notion of "asset", "sensor", or CDF.  Returns a row count.
     pub fn twin_fetch(&mut self, adapter: &str, id: &str, label: &str) -> usize {
+        self.fetch_to(adapter, id, label, false)
+    }
+
+    /// The same boundary fetch, rendered as a card INLINE in the conversation — the
+    /// agent's `show {view:"chart"}` tool.  Same adapters, same lineage; only the
+    /// render target differs.
+    pub fn twin_show_chart(&mut self, adapter: &str, id: &str, label: &str) -> usize {
+        self.fetch_to(adapter, id, label, true)
+    }
+
+    fn fetch_to(&mut self, adapter: &str, id: &str, label: &str, inline: bool) -> usize {
         match adapter {
             // materialize-on-demand time-series lens (§9.11) backed by the Cognite adapter.
-            "cognite-datapoints" => self.fetch_datapoints(id, label),
+            "cognite-datapoints" => self.fetch_datapoints(id, label, inline),
             other => {
                 let msg = format!("no adapter “{other}”");
-                self.call(&format!("T.chartMessage({label:?}, {msg:?})"));
+                let f = if inline { "T.chartInlineMessage" } else { "T.chartMessage" };
+                self.call(&format!("{f}({label:?}, {msg:?})"));
                 0
             }
         }
@@ -115,9 +127,11 @@ impl JsGraph {
 
     /// The Cognite datapoints adapter body: if the series isn't materialized locally,
     /// fetch it on demand — anchored to where the data actually is — write-through-cache
-    /// it (§7), then hand the points to the JS chart lens.  Only this method (and the
-    /// `cognite` module) knows the CDF layout; the core dispatch above does not.
-    fn fetch_datapoints(&mut self, id: &str, label: &str) -> usize {
+    /// it (§7), then hand the points to the JS chart lens (explorer or inline card).
+    /// Only this method (and the `cognite` module) knows the CDF layout; the core
+    /// dispatch above does not.
+    fn fetch_datapoints(&mut self, id: &str, label: &str, inline: bool) -> usize {
+        let msg_fn = if inline { "T.chartInlineMessage" } else { "T.chartMessage" };
         let path = format!("data/cognite/datapoints/{id}.csv");
         let mut pts = crate::source::read_series_downsampled(&path, 700);
         let mut provenance = "materialized locally";
@@ -130,11 +144,11 @@ impl JsGraph {
                     pts = crate::source::downsample(raw, 700);
                 }
                 Ok(_) => {
-                    self.call(&format!("T.chartMessage({label:?}, {:?})", "no datapoints exist for this series"));
+                    self.call(&format!("{msg_fn}({label:?}, {:?})", "no datapoints exist for this series"));
                     return 0;
                 }
                 Err(e) => {
-                    self.call(&format!("T.chartMessage({label:?}, {:?})", format!("couldn't fetch on demand — {e}")));
+                    self.call(&format!("{msg_fn}({label:?}, {:?})", format!("couldn't fetch on demand — {e}")));
                     return 0;
                 }
             }
@@ -142,7 +156,8 @@ impl JsGraph {
 
         let n = pts.len();
         let json = serde_json::to_string(&pts).unwrap_or_else(|_| "[]".into());
-        self.call(&format!("T.chartSeries({id:?}, {label:?}, {json}, {provenance:?})"));
+        let render = if inline { "T.chartInline" } else { "T.chartSeries" };
+        self.call(&format!("{render}({id:?}, {label:?}, {json}, {provenance:?})"));
         n
     }
 

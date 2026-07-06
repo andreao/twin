@@ -173,7 +173,29 @@ fn graph_loop(rx: Receiver<Cmd>, wake: Sender<()>) {
 fn dispatch_tool(g: &mut JsGraph, json: &str) {
     let parsed: Option<serde_json::Value> = serde_json::from_str(json).ok();
     let tool = parsed.as_ref().and_then(|v| v["tool"].as_str()).unwrap_or("");
+    let show_chart = tool == "show"
+        && parsed.as_ref().map(|v| v["args"]["view"] == "chart").unwrap_or(false);
     match tool {
+        // an inline chart is a boundary fetch (datapoints may materialize on demand),
+        // so this one `show` view routes through the host; the rest are pure graph.
+        _ if show_chart => {
+            let args = &parsed.as_ref().unwrap()["args"];
+            let adapter = args["adapter"].as_str().unwrap_or("cognite-datapoints");
+            let id = ["series", "id", "source"]
+                .iter()
+                .find_map(|k| {
+                    let v = &args[*k];
+                    v.as_str().map(String::from).or_else(|| v.as_u64().map(|n| n.to_string()))
+                })
+                .unwrap_or_default();
+            let label = args["title"].as_str()
+                .or_else(|| args["label"].as_str())
+                .unwrap_or(&id)
+                .to_string();
+            if !id.is_empty() {
+                g.twin_show_chart(adapter, &id, &label);
+            }
+        }
         "read_source" => {
             let args = &parsed.as_ref().unwrap()["args"];
             let path = args["path"].as_str().unwrap_or("").trim().to_string();

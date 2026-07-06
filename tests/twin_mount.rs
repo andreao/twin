@@ -227,6 +227,36 @@ fn hierarchy_rolls_up_links_and_agent_can_inspect() {
 }
 
 #[test]
+fn agent_shows_a_chart_inline_in_the_conversation() {
+    let dir = std::path::Path::new("data/cognite/datapoints");
+    if !dir.exists() {
+        eprintln!("skip: no datapoints pulled");
+        return;
+    }
+    let id = std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            (p.extension().map(|x| x == "csv").unwrap_or(false) && e.metadata().map(|m| m.len() > 200).unwrap_or(false))
+                .then(|| p.file_stem().unwrap().to_string_lossy().into_owned())
+        })
+        .next();
+    let id = match id {
+        Some(i) => i,
+        None => return,
+    };
+    let mut g = JsGraph::new_twin();
+    let n = g.twin_show_chart("cognite-datapoints", &id, "bearing temp");
+    assert!(n > 0, "no points for {id}");
+    let muts = g.twin_from(0);
+    // the chart is a view CARD in the feed, not the explorer pane
+    assert!(muts.contains("feed-item view"), "no view card in the conversation: {}", &muts[..muts.len().min(300)]);
+    assert!(muts.contains(":svg") && muts.contains("chart-line"), "no inline svg chart");
+    assert!(!muts.contains("explorer-root"), "inline chart leaked into the explorer pane");
+}
+
+#[test]
 fn user_input_is_captured_raw_and_derived_with_lineage() {
     let mut g = JsGraph::new_twin();
     // pure event sourcing (§8): the user's actions land verbatim in the `input`

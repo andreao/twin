@@ -67,7 +67,7 @@ You act by emitting exactly ONE JSON object per turn — no prose outside it, no
 - {"tool":"think","args":{"text":"..."}}  brief private reasoning, shown as your thought process. Think once, then act.
 - {"tool":"say","args":{"text":"..."}}  a short, warm message. For PROSE only — never for data.
 - {"tool":"ask","args":{"question":"...","options":["...","..."]}}  ask ONE focused question; options are quick-picks. Asking is a first-class part of driving: YOU direct the collaboration by asking the human for the judgment, priorities, and domain knowledge only they have. Ask whenever it moves the work forward — just make each question pointed and worth their time. After you ask, you pause for them.
-- {"tool":"show","args":{"view":"table","source":"<name>","columns":["..."],"limit":10,"filter":"...","title":"..."}}  render a REAL component inline in the conversation. view="table" (a data table; columns/limit/filter optional), view="tree" (an equipment hierarchy from a source like assets), or view="document" with "name":"<file>" (a P&ID/drawing/PDF viewer). This is how you present anything data-shaped. Works on lens:* sources too.
+- {"tool":"show","args":{"view":"table","source":"<name>","columns":["..."],"limit":10,"filter":"...","title":"..."}}  render a REAL component inline in the conversation. view="table" (a data table; columns/limit/filter optional), view="tree" (an equipment hierarchy from a source like assets), view="chart" with "series":"<id from the timeseries source>" (a live line chart of that sensor's datapoints, fetched on demand), or view="document" with "name":"<file>" (a P&ID/drawing/PDF viewer). This is how you present anything data-shaped. Works on lens:* sources too.
 - {"tool":"record_profile","args":{"field":"...","value":"..."}}  save a durable fact about the user (role, goal, industry, data) the moment you learn it — including goals you INFER from their raw actions.
 - {"tool":"read_source","args":{"path":"/absolute/path/to/file.csv"}}  mount a local file (CSV/JSON/JSONL) — federates it (no copy); it then appears in your perception under "sources".
 - {"tool":"inspect","args":{"source":"<name>"}}  profile a mounted source: ranges, empties, duplicates. The result lands in your activity log for the next turn.
@@ -149,12 +149,24 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<()>) -> O
             break;
         }
         let ctx = perceive(tx);
-        // Deterministic nudge: if the user just handed us a data-file path and nothing
-        // is mounted, insist the model call read_source (small models otherwise stall).
-        let nudge = if background {
+        // Deterministic nudges — small local models need hard rails, not suggestions:
+        // (a) a data-file path in the user's message MUST trigger read_source;
+        // (b) after one think, the next output MUST be an action (observed failure
+        //     mode: gemma re-emits near-identical thoughts until the step cap).
+        let base = if background {
             BACKGROUND_BRIEF.to_string()
         } else {
             path_nudge(&ctx).unwrap_or_default()
+        };
+        let nudge = if thoughts >= 1 {
+            let acts = if background {
+                "plan / work / done / inspect / finding / make_lens / show / record_profile / ask / idle"
+            } else {
+                "say / ask / show / inspect / plan / finding / make_lens / record_profile / read_source"
+            };
+            format!("{base}\n\nYou have ALREADY thought this turn. Your next output MUST be an ACTION tool ({acts}) — NOT think.")
+        } else {
+            base
         };
         let content = match call_model(model, &ctx, &nudge) {
             Ok(c) => c,
