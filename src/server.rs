@@ -52,6 +52,12 @@ fn now_ms() -> u64 {
 /// dir each boot, then history replays on top.  Delete the file for a fresh twin.
 const JOURNAL: &str = "data/journal.jsonl";
 
+/// The journal path — overridable (TWIN_JOURNAL) so tests and experiments never
+/// write synthetic history into the real twin's memory.
+fn journal_path() -> String {
+    std::env::var("TWIN_JOURNAL").unwrap_or_else(|_| JOURNAL.to_string())
+}
+
 fn journal_append(file: &mut Option<std::fs::File>, kind: &str, payload: &str) {
     if let Some(f) = file {
         let line = serde_json::json!({ "k": kind, "p": payload }).to_string();
@@ -152,7 +158,7 @@ fn graph_loop(rx: Receiver<Cmd>, wake: Sender<agent::Wake>) {
     // Replay the journal: the twin REMEMBERS.  Same code paths as live traffic, so
     // the replay is exact; no clients are connected yet, so nothing is broadcast.
     let mut replayed = 0usize;
-    if let Ok(text) = std::fs::read_to_string(JOURNAL) {
+    if let Ok(text) = std::fs::read_to_string(journal_path()) {
         for line in text.lines() {
             let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
             match (v["k"].as_str(), v["p"].as_str()) {
@@ -168,7 +174,7 @@ fn graph_loop(rx: Receiver<Cmd>, wake: Sender<agent::Wake>) {
     let mut journal = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(JOURNAL)
+        .open(journal_path())
         .ok();
 
     let mut clients: Vec<Sender<String>> = Vec::new();
