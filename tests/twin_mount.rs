@@ -434,7 +434,7 @@ fn a_finding_opens_with_evidence_link_and_actions() {
     g.twin_event(r#"{"type":"open_finding","id":1,"panel":0}"#);
     let d = g.twin_from(0);
     assert!(d.contains("fd-text") && d.contains("above 70"), "finding text missing: {d}");
-    assert!(d.contains("found in turbines"), "no evidence link to the source");
+    assert!(d.contains("in turbines"), "no evidence link to the source");
     assert!(d.contains("fd:investigate") && d.contains("fd:fix") && d.contains("fd:resolve"), "calls to action missing");
     // resolving is an event: the board card dims and the count reflects it
     g.twin_event(r#"{"type":"resolve_finding","id":1}"#);

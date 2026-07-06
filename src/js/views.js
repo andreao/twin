@@ -43,14 +43,21 @@ class Feed {
       this._emit({ op: 'setAttr', key: mk, name: 'class', value: 'card-meta' });
       this._emit({ op: 'setText', key: mk, text: item.meta || '' });
     } else if (item.kind === 'view') {
-      // a rich view the agent renders into the conversation: a titled card with an
-      // empty body the app fills with a table / hierarchy / document lens (§11.16).
+      // a rich view the agent renders into the conversation: a titled card (with an
+      // optional description line) whose body the app fills with a table /
+      // hierarchy / document lens (§11.16).
       const hk = `${key}:h`;
       this._emit({ op: 'create', key: hk, tag: 'div', parent: key, index: 0 });
       this._emit({ op: 'setAttr', key: hk, name: 'class', value: 'view-title' });
       this._emit({ op: 'setText', key: hk, text: item.text || '' });
+      if (item.sub) {
+        const dk = `${key}:d`;
+        this._emit({ op: 'create', key: dk, tag: 'div', parent: key, index: 1 });
+        this._emit({ op: 'setAttr', key: dk, name: 'class', value: 'card-sub' });
+        this._emit({ op: 'setText', key: dk, text: item.sub });
+      }
       const bk = `${key}:body`;
-      this._emit({ op: 'create', key: bk, tag: 'div', parent: key, index: 1 });
+      this._emit({ op: 'create', key: bk, tag: 'div', parent: key, index: 2 });
       this._emit({ op: 'setAttr', key: bk, name: 'class', value: 'view-body' });
     } else if (item.kind === 'question') {
       const qk = `${key}:q`;

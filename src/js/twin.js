@@ -665,7 +665,7 @@ const T = (() => {
     if (f.source && sources.has(f.source)) {
       V.add('div', 'fd:src', null, i++); V.set('fd:src', 'class', 'fd-src');
       V.set('fd:src', 'data-name', f.source); V.set('fd:src', 'data-title', srcTitle(f.source));
-      V.text('fd:src', `found in ${srcTitle(f.source)} — open the data`);
+      V.text('fd:src', `in ${srcTitle(f.source)}`);
     }
     V.add('div', 'fd:cta', null, i++); V.set('fd:cta', 'class', 'fd-cta');
     V.add('button', 'fd:investigate', 'fd:cta', 0); V.set('fd:investigate', 'class', 'fd-btn primary');
@@ -675,8 +675,6 @@ const T = (() => {
     V.add('button', 'fd:resolve', 'fd:cta', 2); V.set('fd:resolve', 'class', 'fd-btn');
     V.set('fd:resolve', 'data-id', id);
     V.text('fd:resolve', f.status === 'resolved' ? 'Resolved ✓' : 'Mark resolved');
-    V.add('div', 'fd:hint', null, i++); V.set('fd:hint', 'class', 'explorer-note');
-    V.text('fd:hint', 'Investigate and Propose a fix brief the agent in the chat — it will pick this up and answer there.');
   }
 
   // The AGENT page — what's happening in the background, tidily: the agenda as a
@@ -757,8 +755,9 @@ const T = (() => {
     });
     G.submit(lensesSrc, ZSet.fromRows([rec({ name, title, description, source: srcName, code, rowcount: out.length, ver })]), prov('agent'));
     logActivity(`authored lens “${title}” — ${out.length} rows from ${srcTitle(srcName)}`);
-    const sq = append('view', { text: `${title} — ${out.length} rows derived from ${srcName}`, view: 'table' });
-    renderTableInto(`item:${sq}:body`, `v${sq}`, out.slice(0, 8), Object.keys(schema));
+    const sq = append('view', { text: title, sub: description, view: 'table' });
+    renderTableInto(`item:${sq}:body`, `v${sq}`, out.slice(0, 8), Object.keys(schema),
+      `${out.length} rows · a lens over ${srcTitle(srcName)}${out.length > 8 ? ' · showing the first 8' : ''}`);
     cardOpen(sq, title, { type: 'open_source', name: lname });
   }
 
@@ -805,7 +804,9 @@ const T = (() => {
     const stats = [];
     cols.forEach((c) => {
       if (/id$/i.test(c)) return; // identifiers are labels, not measurements
-      const nums = rows.map((r) => Number(r[c])).filter((n) => Number.isFinite(n));
+      // only REAL numbers count — booleans and empty strings coerce to 0/1 and
+      // produce nonsense ranges like "isString 0–1" or "unit 0–0"
+      const nums = rows.map((r) => r[c]).filter((v) => typeof v === 'number' && Number.isFinite(v));
       if (nums.length > rows.length * 0.5 && nums.length) {
         stats.push(`${c} ${fmtNum(Math.min(...nums))}–${fmtNum(Math.max(...nums))}`);
       }
@@ -841,9 +842,9 @@ const T = (() => {
       listen: (sub, type) => TWIN_MUT.push({ op: 'listen', key: `${pfx}:${sub}`, type }),
     };
   }
-  function renderTableInto(root, pfx, rows, cols) {
+  function renderTableInto(root, pfx, rows, cols, note) {
     const b = vbuild(root, pfx);
-    b.add('div', 'note', null, 0); b.set('note', 'class', 'explorer-note'); b.text('note', `${rows.length} rows · ${cols.length} columns`);
+    b.add('div', 'note', null, 0); b.set('note', 'class', 'explorer-note'); b.text('note', note || `${rows.length} rows · ${cols.length} columns`);
     b.add('div', 'scroll', null, 1); b.set('scroll', 'class', 'view-scroll');
     b.add('table', 'tbl', 'scroll', 0);
     b.add('thead', 'hd', 'tbl', 0); b.add('tr', 'htr', 'hd', 0);
@@ -957,9 +958,10 @@ const T = (() => {
     const limit = Math.max(1, Math.min(Number(a.limit) || 10, MAX_EXPLORE_ROWS));
     rows = rows.slice(0, limit);
     const cols = Array.isArray(a.columns) && a.columns.length ? a.columns : Object.keys(s.schema || {});
-    const title = a.title || `${srcTitle(srcName)} — ${rows.length} of ${s.rowcount}`;
+    const title = a.title || srcTitle(srcName);
     const sq = append('view', { text: title, view: 'table' });
-    renderTableInto(`item:${sq}:body`, `v${sq}`, rows, cols.length ? cols : Object.keys(rows[0] || {}));
+    renderTableInto(`item:${sq}:body`, `v${sq}`, rows, cols.length ? cols : Object.keys(rows[0] || {}),
+      `showing ${rows.length} of ${s.rowcount} rows${a.filter ? ` matching “${a.filter}”` : ''}`);
     cardOpen(sq, srcTitle(srcName), { type: 'open_source', name: srcName });
   }
 
