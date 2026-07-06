@@ -6,7 +6,15 @@ use std::io::Write;
 use twin_runtime::JsGraph;
 
 fn write_temp_csv() -> String {
-    let path = std::env::temp_dir().join("twin_test_turbines.csv");
+    // unique per call: tests run in parallel, and a shared path can be observed
+    // mid-truncation by another test (seen as a phantom 0-row source)
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let path = std::env::temp_dir().join(format!(
+        "twin_test_turbines_{}_{}.csv",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
     let mut f = std::fs::File::create(&path).unwrap();
     f.write_all(
         b"turbine_id,site,gearbox_temp,vibration\n\
@@ -452,6 +460,33 @@ fn detail_stack_panels_are_independent_columns() {
     g.twin_event(r#"{"type":"open_source","name":"turbines","panel":0}"#);
     let tail = g.twin_from(before);
     assert!(tail.contains(r#""op":"remove","key":"p1:"#), "column 1 not cleared on re-open at 0: {tail}");
+}
+
+#[test]
+fn agent_page_shows_agenda_and_activity_tidily() {
+    let mut g = JsGraph::new_twin();
+    g.twin_agent_tool(r#"{"tool":"plan","args":{"items":["Profile the turbines","Chart the hottest sensor"]}}"#);
+    g.twin_agent_tool(r#"{"tool":"work","args":{"task":"profile","text":"profiling turbines: ranges look sane"}}"#);
+    g.twin_event(r#"{"type":"open_agent","panel":0}"#);
+    let d = g.twin_from(0);
+    assert!(d.contains("Agenda — 2 open"), "no agenda section: {d}");
+    assert!(d.contains("Profile the turbines") && d.contains("Chart the hottest sensor"), "agenda items missing");
+    assert!(d.contains("ag-row active"), "active item not marked");
+    assert!(d.contains("Recent activity") && d.contains("ranges look sane"), "activity log missing");
+}
+
+#[test]
+fn closing_a_column_is_an_event_and_replays() {
+    let path = write_temp_csv();
+    let mut g = JsGraph::new_twin();
+    g.twin_read_source("turbines", &path, "mounted");
+    g.twin_event(r#"{"type":"open_source","name":"turbines","panel":0}"#);
+    g.twin_event(r#"{"type":"search","query":"WT","panel":1}"#);
+    let before = g.twin_total();
+    g.twin_event(r#"{"type":"close_panel","panel":1}"#);
+    let tail = g.twin_from(before);
+    assert!(tail.contains(r#""key":"p1:"#), "column 1 content not cleared: {tail}");
+    assert!(tail.contains(r#""name":"data-closed","value":"true""#), "no close marker for replay");
 }
 
 #[test]

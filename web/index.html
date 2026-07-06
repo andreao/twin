@@ -90,12 +90,24 @@
   .fnd { cursor: pointer; }
   .fnd.resolved { opacity: .5; }
   .fnd.resolved > div:first-child { text-decoration: line-through; }
+
+  /* the Agent page: agenda checklist + recent work log */
+  .ag-row { display: flex; gap: 10px; align-items: baseline; padding: 6px 8px; border-radius: 8px; font-size: 13.5px; }
+  .ag-row:hover { background: var(--panel); }
+  .ag-s { flex: none; color: var(--muted); }
+  .ag-row.active .ag-s { color: var(--accent); }
+  .ag-row.done { opacity: .55; }
+  .ag-row.done .ag-t { text-decoration: line-through; }
+  .act-row { font-size: 12px; color: var(--muted); padding: 4px 8px; line-height: 1.5; border-bottom: 1px solid var(--line); }
+  .act-row:last-child { border-bottom: none; }
   .view-body { min-height: 0; }
   .view-scroll { overflow-x: auto; max-height: 44vh; overflow-y: auto; }
   .feed-item.view .doc-frame { width: 100%; height: 44vh; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
   .feed-item.view .doc-img { max-width: 100%; border: 1px solid var(--line); border-radius: 8px; }
 
-  .working { max-width: 760px; margin: 0 auto; width: 100%; padding: 4px 24px 8px; height: 22px; color: var(--muted); font-size: 13px; display: none; align-items: center; gap: 8px; }
+  /* the in-progress card: work happening right now, styled like the card it will
+     become when it finishes */
+  .working { max-width: 712px; margin: 0 auto 6px; width: calc(100% - 48px); padding: 10px 14px; color: var(--muted); font-size: 12.5px; display: none; align-items: center; gap: 9px; background: var(--bg); border: 1px dashed var(--line); border-radius: 12px; }
   .working.on { display: flex; }
   #working-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--accent-soft); border-top-color: var(--accent); animation: spin .7s linear infinite; }
@@ -342,7 +354,12 @@
         msg.batch.forEach(applyMutation);
         if (freshSnapshot) {
           // land at NOW — the bottom of the time axis — not at the beginning
-          feedwrap.scrollTop = feedwrap.scrollHeight;
+          // (re-assert after layout settles: fonts/flex can shift heights late)
+          const toBottom = () => { feedwrap.scrollTop = feedwrap.scrollHeight; };
+          toBottom();
+          requestAnimationFrame(toBottom);
+          setTimeout(toBottom, 150);
+          setTimeout(toBottom, 400);
           freshSnapshot = false;
         } else {
           autoscroll();
@@ -397,7 +414,9 @@
     close.title = "Close";
     close.textContent = "×";
     const my = panels.length;
-    close.addEventListener("click", () => removeTopPanels(my));
+    // closing is an EVENT: the graph clears the column and the close marker echoes
+    // back to tear down the chrome — so the open stack is always twin state
+    close.addEventListener("click", () => { send({ type: "close_panel", panel: my }); removeTopPanels(my); });
     head.append(t, star, close);
     const body = document.createElement("div");
     body.className = "panel-body";
@@ -429,6 +448,7 @@
       try { p.ev = JSON.parse(value); } catch (_) { return; }
       if (p.ev && p.ev.type === "open_board" && !p.isBoard) { p.isBoard = true; p.bodyEl.appendChild(boardRoot); }
     }
+    else if (name === "data-closed") removeTopPanels(i);
   }
   // open anything: create the column, then ask the graph to render into it.
   // (open_board is hosted client-side, but the event is still sent so the user's
@@ -437,7 +457,12 @@
     openPanel(i, title, ev);
     send(Object.assign({}, ev, { panel: i, title: title || "" }));
   }
-  statusbar.addEventListener("click", () => openFromEv(0, "The twin", { type: "open_board" }));
+  // the status bar opens the tidy Agent page; the "the twin ▸" corner opens the board
+  statusbar.addEventListener("click", () => openFromEv(0, "Agent", { type: "open_agent" }));
+  document.getElementById("status-open").addEventListener("click", (e) => {
+    e.stopPropagation();
+    openFromEv(0, "The twin", { type: "open_board" });
+  });
 
   // wire the interactions the rendered elements imply. In-panel keys arrive as
   // p<i>:<key>; a link inside column i opens in column i+1 (mode switches replace).

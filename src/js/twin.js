@@ -79,7 +79,7 @@ const T = (() => {
     for (const [row] of delta.entries()) {
       const r = row.asObject();
       activityTail.push(r.text);
-      if (activityTail.length > 12) activityTail.shift();
+      if (activityTail.length > 60) activityTail.shift();
       activityPanel.add(r.seq, r.text);
     }
   });
@@ -223,7 +223,30 @@ const T = (() => {
   // panel chrome (title/star/close) and registers `panel:<i>:body` as the root. ----
   const MAX_EXPLORE_ROWS = 200;
   const panelKeys = new Map(); // panel index -> keys rendered into it
+  const openPanels = new Set(); // which columns are open — twin state, in the log
   const fmtNum = (n) => (Math.abs(n) >= 1000 || Number.isInteger(n)) ? n.toFixed(0) : Number(n.toPrecision(4)).toString();
+
+  // Emit a close marker for every open column ≥ `from` (one marker at the lowest
+  // index — the client tears down that column and everything right of it).
+  function markClosed(from) {
+    const above = [...openPanels].filter((pi) => pi >= from);
+    if (!above.length) return;
+    above.forEach((pi) => openPanels.delete(pi));
+    TWIN_MUT.push({ op: 'setAttr', key: `panel:${Math.min(...above)}:body`, name: 'data-closed', value: 'true' });
+  }
+
+  // The user closed a column: clear its content (and everything to its right) and
+  // mark it closed in the log, so a replaying client rebuilds the same stack.
+  function closePanel(from) {
+    const f = Number(from) || 0;
+    for (const [pi, ks] of [...panelKeys]) {
+      if (pi >= f) {
+        for (const k of ks) TWIN_MUT.push({ op: 'remove', key: k });
+        panelKeys.delete(pi);
+      }
+    }
+    markClosed(f);
+  }
 
   function viewer(panel, title, ev) {
     const p = Number(panel) || 0;
@@ -234,9 +257,12 @@ const T = (() => {
         panelKeys.delete(pi);
       }
     }
+    markClosed(p + 1);
+    openPanels.add(p);
     const fresh = [];
     panelKeys.set(p, fresh);
     const root = `panel:${p}:body`;
+    TWIN_MUT.push({ op: 'setAttr', key: root, name: 'data-closed', value: null });
     // stamp the column with what it shows: a replaying client rebuilds the panel
     // chrome (title, star target) from these marks — open columns survive reloads
     // because the UI state IS in the log, not in the browser.
@@ -653,6 +679,32 @@ const T = (() => {
     V.text('fd:hint', 'Investigate and Propose a fix brief the agent in the chat — it will pick this up and answer there.');
   }
 
+  // The AGENT page — what's happening in the background, tidily: the agenda as a
+  // checklist, then the recent work log.  Opened from the status bar.
+  function openAgentPage(panel) {
+    const V = viewer(panel, 'Agent', { type: 'open_agent' });
+    V.add('div', 'ag:note', null, 0); V.set('ag:note', 'class', 'explorer-note');
+    const openCount = [...agenda.values()].filter((a) => a.status !== 'done').length;
+    V.text('ag:note', `what the agent is working on, planning, and recently did · ${lenses.size} lenses authored · ${[...findings.values()].filter((f) => f.status !== 'resolved').length} open findings`);
+    V.add('div', 'ag:h1', null, 1); V.set('ag:h1', 'class', 'ad-section'); V.text('ag:h1', `Agenda — ${openCount} open`);
+    V.add('div', 'ag:list', null, 2);
+    if (!agenda.size) { V.add('div', 'ag:none', 'ag:list', 0); V.set('ag:none', 'class', 'ad-empty'); V.text('ag:none', 'no agenda yet — the agent plans its own work here'); }
+    let i = 0;
+    for (const [id, a] of agenda) {
+      const k = `ag:${id}`;
+      V.add('div', k, 'ag:list', i++); V.set(k, 'class', `ag-row ${a.status}`);
+      V.add('span', `${k}:s`, k, 0); V.set(`${k}:s`, 'class', 'ag-s'); V.text(`${k}:s`, a.status === 'done' ? '✓' : a.status === 'active' ? '●' : '○');
+      V.add('span', `${k}:t`, k, 1); V.set(`${k}:t`, 'class', 'ag-t'); V.text(`${k}:t`, a.text);
+    }
+    V.add('div', 'ag:h2', null, 3); V.set('ag:h2', 'class', 'ad-section'); V.text('ag:h2', 'Recent activity');
+    V.add('div', 'ag:acts', null, 4);
+    if (!activityTail.length) { V.add('div', 'ag:qn', 'ag:acts', 0); V.set('ag:qn', 'class', 'ad-empty'); V.text('ag:qn', 'quiet so far'); }
+    activityTail.slice().reverse().forEach((t, ai) => {
+      const k = `ag:act${ai}`;
+      V.add('div', k, 'ag:acts', ai); V.set(k, 'class', 'act-row'); V.text(k, t);
+    });
+  }
+
   // Resolving a finding is an event like everything else; the folds dim it on the
   // board, in the count, and on re-opened detail views.
   function resolveFinding(id) {
@@ -994,6 +1046,10 @@ const T = (() => {
       openFinding(e.id, e.panel);
     } else if (e.type === 'resolve_finding') {
       resolveFinding(e.id);
+    } else if (e.type === 'open_agent') {
+      openAgentPage(e.panel);
+    } else if (e.type === 'close_panel') {
+      closePanel(e.panel);
     } else if (e.type === 'star') {
       toggleStar(e);
     }
@@ -1047,6 +1103,8 @@ const T = (() => {
       case 'watch': return 'opened the Watch board';
       case 'fetch': return `charted series ${e.label || e.id}`;
       case 'open_board': return 'opened the twin board';
+      case 'open_agent': return 'checked what the agent is doing';
+      case 'close_panel': return 'closed a column';
       case 'open_finding': return `opened finding #${e.id}`;
       case 'resolve_finding': return `resolved finding #${e.id}`;
       case 'star': return `starred “${e.title || 'a page'}”`;

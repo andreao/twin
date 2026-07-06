@@ -311,6 +311,7 @@ fn serve_html(mut stream: TcpStream) -> std::io::Result<()> {
     let resp = format!(
         "HTTP/1.1 200 OK\r\n\
          Content-Type: text/html; charset=utf-8\r\n\
+         Cache-Control: no-store\r\n\
          Content-Length: {}\r\n\
          Connection: close\r\n\r\n{}",
         INDEX_HTML.len(),
