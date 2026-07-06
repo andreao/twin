@@ -27,7 +27,17 @@ class Feed {
     this._emit({ op: 'create', key, tag: 'div', parent: this.root, index: idx });
     this._emit({ op: 'setAttr', key, name: 'class', value: `feed-item ${item.kind}` });
 
-    if (item.kind === 'question') {
+    if (item.kind === 'view') {
+      // a rich view the agent renders into the conversation: a titled card with an
+      // empty body the app fills with a table / hierarchy / document lens (§11.16).
+      const hk = `${key}:h`;
+      this._emit({ op: 'create', key: hk, tag: 'div', parent: key, index: 0 });
+      this._emit({ op: 'setAttr', key: hk, name: 'class', value: 'view-title' });
+      this._emit({ op: 'setText', key: hk, text: item.text || '' });
+      const bk = `${key}:body`;
+      this._emit({ op: 'create', key: bk, tag: 'div', parent: key, index: 1 });
+      this._emit({ op: 'setAttr', key: bk, name: 'class', value: 'view-body' });
+    } else if (item.kind === 'question') {
       const qk = `${key}:q`;
       this._emit({ op: 'create', key: qk, tag: 'div', parent: key, index: 0 });
       this._emit({ op: 'setAttr', key: qk, name: 'class', value: 'q-text' });

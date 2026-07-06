@@ -79,12 +79,20 @@
   .q-option { display: block; width: 100%; text-align: left; background: var(--bg); border: 1px solid var(--line); border-radius: 9px; padding: 10px 13px; margin: 6px 0; font: inherit; color: var(--ink); cursor: pointer; transition: background .12s, border-color .12s; }
   .q-option:hover { background: var(--accent-soft); border-color: var(--accent); }
 
+  /* ---- inline agent views (rich visuals rendered into the conversation) ---- */
+  .feed-item.view { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; margin: 8px 0; box-shadow: 0 1px 2px rgba(0,0,0,.02); }
+  .view-title { font-weight: 550; font-size: 13.5px; margin-bottom: 10px; }
+  .view-body { min-height: 0; }
+  .view-scroll { overflow-x: auto; max-height: 60vh; overflow-y: auto; }
+  .feed-item.view .doc-frame { width: 100%; height: 62vh; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+  .feed-item.view .doc-img { max-width: 100%; border: 1px solid var(--line); border-radius: 8px; }
+
   /* ---- data explorer ---- */
   .explorer { flex: 1; min-height: 0; overflow: auto; padding: 20px 28px; }
-  #explorer-root table { border-collapse: collapse; width: 100%; font-size: 13px; }
-  #explorer-root th { text-align: left; position: sticky; top: 0; background: var(--bg); color: var(--muted); font-weight: 500; padding: 8px 11px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-  #explorer-root td { padding: 6px 11px; border-bottom: 1px solid var(--line); white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
-  #explorer-root tr:hover td { background: var(--panel); }
+  #explorer-root table, .view-body table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  #explorer-root th, .view-body th { text-align: left; position: sticky; top: 0; background: var(--bg); color: var(--muted); font-weight: 500; padding: 8px 11px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  #explorer-root td, .view-body td { padding: 6px 11px; border-bottom: 1px solid var(--line); white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+  #explorer-root tr:hover td, .view-body tr:hover td { background: var(--bg); }
   .explorer-note { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
   #explorer-root .chartable { cursor: pointer; }
   #explorer-root .chartable:hover td { background: var(--accent-soft); }
@@ -229,12 +237,12 @@
   // wire the interactions the twin's rendered elements imply (all keyed by logical id)
   function wire(el, key) {
     if (/^sr:[^:]+$/.test(key)) el.addEventListener("click", () => openSource(key.slice(3)));
-    else if (/^exp:r:\d+$/.test(key)) el.addEventListener("click", () => { if (el.dataset.series) send({ type: "chart_series", id: el.dataset.series, label: el.dataset.label || el.dataset.series }); });
+    else if (/^exp:r:\d+$/.test(key)) el.addEventListener("click", () => { if (el.dataset.series) send({ type: "fetch", adapter: el.dataset.adapter || "cognite-datapoints", id: el.dataset.series, label: el.dataset.label || el.dataset.series }); });
     else if (key.startsWith("doc:") && !key.endsWith(":n") && !key.endsWith(":t")) el.addEventListener("click", () => send({ type: "open_document", name: key.slice(4) }));
     else if (key === "exp:back") el.addEventListener("click", () => { showView("explorer", "documents"); send({ type: "open_source", name: "documents" }); });
     else if (key.startsWith("mode:")) el.addEventListener("click", () => { const [, name, mode] = key.split(":"); showView("explorer", name); send({ type: "open_source", name, mode }); });
     else if (/^tn:[^:]+$/.test(key)) el.addEventListener("click", () => { showView("explorer", "Asset"); send({ type: "open_asset", id: key.slice(3) }); });
-    else if (/^sens:[^:]+$/.test(key)) el.addEventListener("click", () => { if (el.dataset.series) { showView("explorer", el.dataset.label || "Sensor"); send({ type: "chart_series", id: el.dataset.series, label: el.dataset.label || el.dataset.series }); } });
+    else if (/^sens:[^:]+$/.test(key)) el.addEventListener("click", () => { if (el.dataset.series) { showView("explorer", el.dataset.label || "Sensor"); send({ type: "fetch", adapter: el.dataset.adapter || "cognite-datapoints", id: el.dataset.series, label: el.dataset.label || el.dataset.series }); } });
     else if (key === "ad:back") el.addEventListener("click", () => { showView("explorer", "assets"); send({ type: "open_source", name: "assets", mode: "tree" }); });
     else if (/^iss:[^:]+:\d+:\d+$/.test(key)) el.addEventListener("click", () => { showView("explorer", "Asset"); send({ type: "open_asset", id: key.split(":")[1] }); });
   }

@@ -97,10 +97,27 @@ impl JsGraph {
         self.call("T.perceive()")
     }
 
-    /// The parametrized chart lens (§9.11, §11.15): chart a sensor's raw datapoints.
-    /// If not materialized locally, fetch on demand from Cognite, anchored to where the
-    /// data actually is, and write-through-cache it (§7). Returns the point count.
-    pub fn twin_chart_series(&mut self, id: &str, label: &str) -> usize {
+    /// A generic boundary fetch (§9.9): invoke a named host capability by `(adapter, id)`
+    /// and land the result back in JS to render.  The CORE knows only adapter *keys* —
+    /// each adapter owns its own domain specifics (endpoints, on-disk layout), so the
+    /// core carries no notion of "asset", "sensor", or CDF.  Returns a row count.
+    pub fn twin_fetch(&mut self, adapter: &str, id: &str, label: &str) -> usize {
+        match adapter {
+            // materialize-on-demand time-series lens (§9.11) backed by the Cognite adapter.
+            "cognite-datapoints" => self.fetch_datapoints(id, label),
+            other => {
+                let msg = format!("no adapter “{other}”");
+                self.call(&format!("T.chartMessage({label:?}, {msg:?})"));
+                0
+            }
+        }
+    }
+
+    /// The Cognite datapoints adapter body: if the series isn't materialized locally,
+    /// fetch it on demand — anchored to where the data actually is — write-through-cache
+    /// it (§7), then hand the points to the JS chart lens.  Only this method (and the
+    /// `cognite` module) knows the CDF layout; the core dispatch above does not.
+    fn fetch_datapoints(&mut self, id: &str, label: &str) -> usize {
         let path = format!("data/cognite/datapoints/{id}.csv");
         let mut pts = crate::source::read_series_downsampled(&path, 700);
         let mut provenance = "materialized locally";
@@ -113,7 +130,7 @@ impl JsGraph {
                     pts = crate::source::downsample(raw, 700);
                 }
                 Ok(_) => {
-                    self.call(&format!("T.chartMessage({label:?}, {:?})", "no datapoints exist for this sensor"));
+                    self.call(&format!("T.chartMessage({label:?}, {:?})", "no datapoints exist for this series"));
                     return 0;
                 }
                 Err(e) => {
@@ -127,11 +144,6 @@ impl JsGraph {
         let json = serde_json::to_string(&pts).unwrap_or_else(|_| "[]".into());
         self.call(&format!("T.chartSeries({id:?}, {label:?}, {json}, {provenance:?})"));
         n
-    }
-
-    /// Register a documents source (§9.15) from a list of `[name, mime, bytes]`.
-    pub fn twin_register_documents(&mut self, docs_json: &str) {
-        self.call(&format!("T.registerDocuments({docs_json})"));
     }
 
     /// Install a skill (§4.1) into the twin — used by the core skills-loader (§11.13).

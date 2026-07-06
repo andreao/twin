@@ -46,8 +46,10 @@ const T = (() => {
 
   function append(kind, payload) {
     seq += 1;
-    G.submit(feedSrc, ZSet.fromRows([rec(Object.assign({ seq, kind }, payload))]),
+    const s = seq;
+    G.submit(feedSrc, ZSet.fromRows([rec(Object.assign({ seq: s, kind }, payload))]),
       prov(kind === 'user' ? 'user' : 'agent'));
+    return s; // the feed seq — used to address a rendered view's body card
   }
   function recordProfile(field, value) {
     if (!field) return;
@@ -66,6 +68,17 @@ const T = (() => {
   }
   // Called from the Rust boundary once a file has been read (mount = federate, §9.9).
   function mountSource(name, meta, rows) {
+    // A documents corpus is an app-lens concern (not core): a mounted source whose rows
+    // are files (name + optional assetIds).  The residence model is uniform — it's still
+    // just a federated source — but we render it as a gallery, not a table.
+    if (name === 'documents') {
+      const docs = rows.map((r) => ({ name: r.name, bytes: r.bytes || 0, assetIds: r.assetIds || [] }));
+      const info = { kind: 'documents', residence: meta.residence, rowcount: meta.rowcount, docs };
+      sources.set('documents', info);
+      sourcesPanel.set('documents', info);
+      append('system', { text: `Mounted “documents” — ${docs.length} files (${meta.residence}).` });
+      return;
+    }
     let id = sourceIds.get(name);
     if (id === undefined) { id = G.source('src:' + name, true); sourceIds.set(name, id); }
     // materialize the rebuildable in-heap view (§15.1); truth stays in the file.
@@ -84,13 +97,6 @@ const T = (() => {
   }
   function sourceError(name, msg) {
     append('system', { text: `Couldn't read “${name}”: ${msg}` });
-  }
-
-  // A documents source (§9.15) — the pulled P&IDs/drawings, viewable in-app.
-  function registerDocuments(docs) {
-    const info = { kind: 'documents', residence: 'mounted', rowcount: docs.length, docs };
-    sources.set('documents', info);
-    sourcesPanel.set('documents', info);
   }
 
   // ---- viewer lenses (§11.15): every visualization is a lens rendering into the
@@ -418,6 +424,102 @@ const T = (() => {
     append('system', { text: `Inspected “${src}”: ${rows.length} rows, ${cols.length} columns.${stats.length ? ' Numeric ranges — ' + stats.join('; ') + '.' : ''}` });
   }
 
+  // ---- inline rich views (§11.6, §11.16): the AGENT communicates through visuals ----
+  // Every visual is a lens rendered as a card IN THE CONVERSATION — a real table,
+  // hierarchy, or document viewer, not markdown text.  Each card is addressed by the
+  // feed seq of its 'view' item; keys are namespaced by `v<seq>` so cards never collide
+  // and the append-only log still replays deterministically (§11.5).
+  function vbuild(root, pfx) {
+    return {
+      add: (tag, sub, parent, index) => {
+        TWIN_MUT.push({ op: 'create', key: `${pfx}:${sub}`, tag, parent: parent == null ? root : `${pfx}:${parent}`, index });
+        return `${pfx}:${sub}`;
+      },
+      set: (sub, name, value) => TWIN_MUT.push({ op: 'setAttr', key: `${pfx}:${sub}`, name, value: String(value) }),
+      text: (sub, t) => TWIN_MUT.push({ op: 'setText', key: `${pfx}:${sub}`, text: String(t) }),
+      listen: (sub, type) => TWIN_MUT.push({ op: 'listen', key: `${pfx}:${sub}`, type }),
+    };
+  }
+  function renderTableInto(root, pfx, rows, cols) {
+    const b = vbuild(root, pfx);
+    b.add('div', 'note', null, 0); b.set('note', 'class', 'explorer-note'); b.text('note', `${rows.length} rows · ${cols.length} columns`);
+    b.add('div', 'scroll', null, 1); b.set('scroll', 'class', 'view-scroll');
+    b.add('table', 'tbl', 'scroll', 0);
+    b.add('thead', 'hd', 'tbl', 0); b.add('tr', 'htr', 'hd', 0);
+    cols.forEach((c, i) => { b.add('th', `h${i}`, 'htr', i); b.text(`h${i}`, c); });
+    b.add('tbody', 'tb', 'tbl', 1);
+    rows.forEach((row, ri) => {
+      b.add('tr', `r${ri}`, 'tb', ri);
+      cols.forEach((c, ci) => { b.add('td', `c${ri}_${ci}`, `r${ri}`, ci); b.text(`c${ri}_${ci}`, row[c] == null ? '' : String(row[c])); });
+    });
+  }
+  function renderTreeInto(root, pfx, name) {
+    const rows = rowsOf(name);
+    const b = vbuild(root, pfx);
+    const byId = new Map(rows.map((r) => [String(r.id), r]));
+    const kids = new Map(); const roots = [];
+    rows.forEach((r) => { const p = r.parentId != null ? String(r.parentId) : null; if (p && byId.has(p)) { (kids.get(p) || kids.set(p, []).get(p)).push(r); } else { roots.push(r); } });
+    const sByA = new Map(); rowsOf('timeseries').forEach((t) => { const a = String(t.assetId); sByA.set(a, (sByA.get(a) || 0) + 1); });
+    const eByA = new Map(); rowsOf('events').forEach((e) => String(e.assetIds || '').split(';').forEach((a) => { if (a) eByA.set(a, (eByA.get(a) || 0) + 1); }));
+    const sub = new Map();
+    const roll = (r) => { let sc = sByA.get(String(r.id)) || 0, ec = eByA.get(String(r.id)) || 0; (kids.get(String(r.id)) || []).forEach((c) => { const cv = roll(c); sc += cv.s; ec += cv.e; }); const v = { s: sc, e: ec }; sub.set(String(r.id), v); return v; };
+    roots.forEach(roll);
+    b.add('div', 'note', null, 0); b.set('note', 'class', 'explorer-note'); b.text('note', `asset hierarchy · ${rows.length} items · • = instrumented · counts roll up the subtree`);
+    b.add('div', 'tree', null, 1); b.set('tree', 'class', 'tree view-scroll');
+    let idx = 0;
+    const emit = (r, depth) => {
+      const k = `tn:${r.id}`, v = sub.get(String(r.id)) || { s: 0, e: 0 };
+      // reuse the tn: action key so tree nodes in the feed open the asset dashboard too
+      TWIN_MUT.push({ op: 'create', key: k, tag: 'div', parent: `${pfx}:tree`, index: idx++ });
+      TWIN_MUT.push({ op: 'setAttr', key: k, name: 'class', value: 'tree-node' });
+      TWIN_MUT.push({ op: 'setAttr', key: k, name: 'style', value: `padding-left:${depth * 20 + 4}px` });
+      TWIN_MUT.push({ op: 'create', key: `${k}:dot`, tag: 'span', parent: k, index: 0 });
+      TWIN_MUT.push({ op: 'setAttr', key: `${k}:dot`, name: 'class', value: 'tree-dot' + (v.s ? ' on' : '') });
+      TWIN_MUT.push({ op: 'create', key: `${k}:nm`, tag: 'span', parent: k, index: 1 });
+      TWIN_MUT.push({ op: 'setAttr', key: `${k}:nm`, name: 'class', value: 'tree-name' });
+      TWIN_MUT.push({ op: 'setText', key: `${k}:nm`, text: r.name || String(r.id) });
+      if (v.s || v.e) { TWIN_MUT.push({ op: 'create', key: `${k}:b`, tag: 'span', parent: k, index: 2 }); TWIN_MUT.push({ op: 'setAttr', key: `${k}:b`, name: 'class', value: 'tree-badge' }); TWIN_MUT.push({ op: 'setText', key: `${k}:b`, text: `  ${v.s} sensors · ${v.e} events` }); }
+      (kids.get(String(r.id)) || []).forEach((c) => emit(c, depth + 1));
+    };
+    roots.forEach((r) => emit(r, 0));
+  }
+  function renderDocInto(root, pfx, name) {
+    const b = vbuild(root, pfx);
+    const ext = String(name).split('.').pop().toLowerCase();
+    const src = '/file/' + encodeURIComponent(name);
+    if (ext === 'pdf') { b.add('iframe', 'doc', null, 0); b.set('doc', 'src', src); b.set('doc', 'class', 'doc-frame'); }
+    else if (ext === 'mp4') { b.add('video', 'doc', null, 0); b.set('doc', 'src', src); b.set('doc', 'controls', 'true'); b.set('doc', 'class', 'doc-frame'); }
+    else { b.add('img', 'doc', null, 0); b.set('doc', 'src', src); b.set('doc', 'class', 'doc-img'); }
+  }
+
+  // The agent's `show` tool — render a real component inline in the conversation.
+  function doShow(a) {
+    const view = String(a.view || 'table').toLowerCase();
+    if (view === 'document' || view === 'doc') {
+      const name = a.name || a.document || a.source;
+      if (!name) return;
+      const sq = append('view', { text: a.title || String(name), view: 'document' });
+      renderDocInto(`item:${sq}:body`, `v${sq}`, name);
+      return;
+    }
+    const srcName = String(a.source || a.name || '');
+    const s = sources.get(srcName);
+    if (!s) { append('system', { text: `No source “${srcName}” to show — mount it first.` }); return; }
+    if (view === 'tree' || view === 'hierarchy') {
+      const sq = append('view', { text: a.title || `${srcName} — hierarchy`, view: 'tree' });
+      renderTreeInto(`item:${sq}:body`, `v${sq}`, srcName);
+      return;
+    }
+    // table (default)
+    let rows = rowsOf(srcName);
+    if (a.filter) { const q = String(a.filter).toLowerCase(); rows = rows.filter((r) => Object.values(r).some((v) => v != null && String(v).toLowerCase().includes(q))); }
+    const limit = Math.max(1, Math.min(Number(a.limit) || 10, MAX_EXPLORE_ROWS));
+    rows = rows.slice(0, limit);
+    const cols = Array.isArray(a.columns) && a.columns.length ? a.columns : Object.keys(s.schema || {});
+    const sq = append('view', { text: a.title || `${srcName} — showing ${rows.length} of ${s.rowcount}`, view: 'table' });
+    renderTableInto(`item:${sq}:body`, `v${sq}`, rows, cols.length ? cols : Object.keys(rows[0] || {}));
+  }
+
   // ---- agent tool surface (§12.1) -------------------------------------------
   function agentTool(json) {
     let c; try { c = JSON.parse(json); } catch (_) { return; }
@@ -428,6 +530,7 @@ const T = (() => {
       case 'ask': append('question', { text: String(a.question || a.text || ''), options: a.options || [] }); break;
       case 'record_profile': recordProfile(a.field, a.value); break;
       case 'inspect': inspectSource(a.source); break;
+      case 'show': doShow(a); break;
       // read_source is effectful: handled at the Rust boundary, which calls mountSource.
       default: if (a.text) append('agent', { text: String(a.text) }); break;
     }
@@ -470,7 +573,7 @@ const T = (() => {
 
   return {
     agentTool, event, perceive, mountSource, sourceError, installSkill,
-    registerDocuments, chartSeries, chartMessage,
+    chartSeries, chartMessage,
     // the shared mutation log (§11.3): replaying [0..total) rebuilds the DOM exactly.
     total() { return TWIN_MUT.length; },
     from(n) { return JSON.stringify(TWIN_MUT.slice(n)); },

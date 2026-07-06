@@ -80,7 +80,7 @@ fn charting_a_sensor_renders_an_svg_line() {
         None => return,
     };
     let mut g = JsGraph::new_twin();
-    let n = g.twin_chart_series(&id, "sensor");
+    let n = g.twin_fetch("cognite-datapoints", &id, "sensor");
     assert!(n > 0, "no points read for {id}");
     let muts = g.twin_from(0);
     assert!(muts.contains("\"tag\":\"svg\""), "no svg element rendered");
@@ -90,13 +90,31 @@ fn charting_a_sensor_renders_an_svg_line() {
 #[test]
 fn documents_source_renders_a_gallery_and_embed() {
     let mut g = JsGraph::new_twin();
-    g.twin_register_documents(r#"[{"name":"PID-1.pdf","bytes":1024},{"name":"draw.svg","bytes":2048}]"#);
+    // documents are just a mounted source now (§7 uniform residence) — the core has no
+    // special "documents" path; the app-lens renders the gallery.
+    let d = std::env::temp_dir().join("twin_docs.json");
+    std::fs::write(&d, r#"[{"name":"PID-1.pdf","bytes":1024},{"name":"draw.svg","bytes":2048}]"#).unwrap();
+    g.twin_read_source("documents", d.to_str().unwrap(), "mounted");
     g.twin_event(r#"{"type":"open_source","name":"documents"}"#);
     let gallery = g.twin_from(0);
     assert!(gallery.contains("doc-gallery") && gallery.contains("doc:PID-1.pdf"), "no gallery");
     g.twin_event(r#"{"type":"open_document","name":"PID-1.pdf"}"#);
     let embed = g.twin_from(0);
     assert!(embed.contains("/file/PID-1.pdf"), "no document embed src");
+}
+
+#[test]
+fn agent_show_renders_a_table_inline_in_the_conversation() {
+    let mut g = JsGraph::new_twin();
+    let a = std::env::temp_dir().join("show_assets.csv");
+    std::fs::write(&a, "id,name,description\n1,Compressor,1st stage\n2,Pump,water inj\n3,Valve,relief\n").unwrap();
+    g.twin_read_source("assets", a.to_str().unwrap(), "mounted");
+    // the AGENT shows data as a real component — not markdown text
+    g.twin_agent_tool(r#"{"tool":"show","args":{"view":"table","source":"assets","limit":2}}"#);
+    let d = g.twin_from(0);
+    assert!(d.contains("feed-item view") || d.contains("view-body"), "no inline view card rendered");
+    assert!(d.contains("Compressor") && d.contains("Pump"), "table rows missing");
+    assert!(!d.contains("Valve"), "limit not applied (should show only 2 of 3)");
 }
 
 #[test]
@@ -117,7 +135,7 @@ fn parametrized_datapoints_lens_fetches_on_demand() {
     let mut g = JsGraph::new_twin();
     // 1009048440794092: empty in our 30-day window, but has data back in 2023
     let _ = std::fs::remove_file("data/cognite/datapoints/1009048440794092.csv");
-    let n = g.twin_chart_series("1009048440794092", "VAL-test");
+    let n = g.twin_fetch("cognite-datapoints", "1009048440794092", "VAL-test");
     eprintln!("on-demand chart: {n} points");
     let muts = g.twin_from(0);
     if n > 0 {
@@ -161,7 +179,9 @@ fn asset_dashboard_composes_sensors_and_events() {
     g.twin_read_source("timeseries", t.to_str().unwrap(), "mounted");
     g.twin_read_source("events", e.to_str().unwrap(), "mounted");
     // a P&ID that references asset 10 and an unrelated one that does not
-    g.twin_register_documents(r#"[{"name":"PID-10.pdf","bytes":10,"assetIds":[10]},{"name":"other.pdf","bytes":20,"assetIds":[77]}]"#);
+    let dj = std::env::temp_dir().join("ad_docs.json");
+    std::fs::write(&dj, r#"[{"name":"PID-10.pdf","bytes":10,"assetIds":[10]},{"name":"other.pdf","bytes":20,"assetIds":[77]}]"#).unwrap();
+    g.twin_read_source("documents", dj.to_str().unwrap(), "mounted");
     g.twin_event(r#"{"type":"open_asset","id":"10"}"#);
     let d = g.twin_from(0);
     assert!(d.contains("Compressor"), "no asset header");

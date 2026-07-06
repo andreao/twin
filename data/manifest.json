@@ -1,0 +1,9 @@
+{
+  "_comment": "Domain-neutral mount manifest (§7 residence). The CORE loops over these {name,path,residence} entries and mounts each generically — it never interprets the names. All domain vocabulary (assets/timeseries/events/documents) lives HERE, in data, not in the Rust core.",
+  "mounts": [
+    { "name": "assets", "path": "data/cognite/assets.csv", "residence": "mounted" },
+    { "name": "timeseries", "path": "data/cognite/timeseries.csv", "residence": "mounted" },
+    { "name": "events", "path": "data/cognite/events.csv", "residence": "mounted" },
+    { "name": "documents", "path": "data/cognite/files.json", "residence": "mounted" }
+  ]
+}

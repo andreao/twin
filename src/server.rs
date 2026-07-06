@@ -76,41 +76,24 @@ fn graph_loop(rx: Receiver<Cmd>, wake: Sender<()>) {
             found.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", "));
     }
 
-    // Bootstrap: mount any corpora a skill has already pulled to disk, so data the
-    // twin "has" is actually known and browsable in the app. (Interim seam until the
-    // agent-driven boundary lens does this itself with lineage.)
-    for (name, path) in [
-        ("assets", "data/cognite/assets.csv"),
-        ("timeseries", "data/cognite/timeseries.csv"),
-        ("events", "data/cognite/events.csv"),
-    ] {
-        if std::path::Path::new(path).exists() {
-            let status = g.twin_read_source(name, path, "mounted");
-            println!("{status}");
+    // Bootstrap mounts from a declarative, domain-NEUTRAL manifest (§7 residence): the
+    // core loops over `{name, path, residence}` entries and mounts each generically —
+    // it never knows what "assets" or "documents" mean.  The domain vocabulary lives in
+    // the data manifest, not in the core.  (Interim seam until the agent-driven boundary
+    // lens does this itself with lineage.)
+    if let Ok(text) = std::fs::read_to_string("data/manifest.json") {
+        if let Ok(m) = serde_json::from_str::<serde_json::Value>(&text) {
+            for entry in m["mounts"].as_array().into_iter().flatten() {
+                let name = entry["name"].as_str().unwrap_or("");
+                let path = entry["path"].as_str().unwrap_or("");
+                let residence = entry["residence"].as_str().unwrap_or("mounted");
+                if name.is_empty() || path.is_empty() || !std::path::Path::new(path).exists() {
+                    continue;
+                }
+                let status = g.twin_read_source(name, path, residence);
+                println!("{status}");
+            }
         }
-    }
-    // register the pulled documents (P&IDs etc.), carrying their asset links so each
-    // shows up on the dashboards of the equipment it depicts
-    let docs: Vec<serde_json::Value> = std::fs::read_to_string("data/cognite/files.json")
-        .ok()
-        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-        .and_then(|v| {
-            v.as_array().map(|arr| {
-                arr.iter()
-                    .filter_map(|f| {
-                        let name = f["name"].as_str()?.to_string();
-                        let bytes = std::fs::metadata(format!("data/cognite/files/{name}"))
-                            .map(|m| m.len())
-                            .unwrap_or(0);
-                        Some(serde_json::json!({ "name": name, "bytes": bytes, "assetIds": f["assetIds"].clone() }))
-                    })
-                    .collect::<Vec<_>>()
-            })
-        })
-        .unwrap_or_default();
-    if !docs.is_empty() {
-        g.twin_register_documents(&serde_json::to_string(&docs).unwrap_or_else(|_| "[]".into()));
-        println!("registered {} documents", docs.len());
     }
 
     let mut clients: Vec<Sender<String>> = Vec::new();
@@ -130,12 +113,15 @@ fn graph_loop(rx: Receiver<Cmd>, wake: Sender<()>) {
                 let ev: Option<serde_json::Value> = serde_json::from_str(&json).ok();
                 let etype = ev.as_ref().and_then(|v| v["type"].as_str()).unwrap_or("");
                 match etype {
-                    // chart-a-sensor needs to read datapoints off disk (an effect)
-                    "chart_series" => {
+                    // a boundary fetch (§9.9): invoke a named host capability by
+                    // (adapter, id).  The core routes by adapter key; it doesn't know
+                    // the domain (here: a time-series lens materialized on demand).
+                    "fetch" => {
                         let v = ev.as_ref().unwrap();
+                        let adapter = v["adapter"].as_str().unwrap_or("");
                         let id = v["id"].as_str().unwrap_or("");
                         let label = v["label"].as_str().unwrap_or(id);
-                        g.twin_chart_series(id, label);
+                        g.twin_fetch(adapter, id, label);
                     }
                     _ => g.twin_event(&json),
                 }
