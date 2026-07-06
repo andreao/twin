@@ -285,7 +285,7 @@ fn agent_keeps_an_agenda_and_activity_log() {
     assert!(muts.contains("agent-act") && muts.contains("profiling turbines"), "activity line missing");
     // status changes are new EVENTS; when the active item is done, the fold moves on
     g.twin_agent_tool(r#"{"tool":"done","args":{"task":"profile"}}"#);
-    assert!(g.twin_from(0).contains("plan: Look for data gaps"), "plan line did not advance");
+    assert!(g.twin_from(0).contains("next: Look for data gaps"), "plan line did not advance");
     let seen = g.twin_perceive();
     assert!(seen.contains("Look for data gaps"), "agenda not perceived: {seen}");
     assert!(seen.contains("\"agendaDone\":1"), "done count not perceived: {seen}");
@@ -323,21 +323,60 @@ fn agent_authors_a_lens_with_lineage() {
     let mut g = JsGraph::new_twin();
     g.twin_read_source("turbines", &path, "mounted");
     g.twin_agent_tool(
-        r#"{"tool":"make_lens","args":{"name":"Hot Gearboxes","source":"turbines","code":"return rows.filter(r => Number(r.gearbox_temp) > 70)","title":"Turbines running hot"}}"#,
+        r#"{"tool":"make_lens","args":{"name":"Hot gearboxes","description":"Turbines whose gearbox runs above 70 degrees.","source":"turbines","code":"return rows.filter(r => Number(r.gearbox_temp) > 70)"}}"#,
     );
     let muts = g.twin_from(0);
-    // the artifact card carries the lens's lineage: source, code, author
-    assert!(muts.contains("ln:hot-gearboxes"), "no lens card in artifacts: {muts}");
-    assert!(muts.contains("return rows.filter"), "lens code (lineage) not on the card");
-    assert!(muts.contains("derived from turbines"), "lens source (lineage) not on the card");
+    // the board tile shows a HUMAN title + description — never code, never "lens:" slugs
+    assert!(muts.contains("ln:hot-gearboxes"), "no lens tile on the board: {muts}");
+    assert!(muts.contains("Hot gearboxes"), "human title missing from the tile");
+    assert!(muts.contains("above 70 degrees"), "description missing from the tile");
+    assert!(muts.contains("a lens over turbines"), "lineage-in-words missing from the tile");
+    assert!(!muts.contains("return rows.filter"), "code leaked onto the board tile");
     // the derived rows render inline as a view card; the filtered-out row does not
     assert!(muts.contains("WT-02") && muts.contains("WT-03"), "derived rows missing from inline view");
     assert!(!muts.contains("WT-01"), "lens filter not applied");
-    // the lens is a live derived source of its own — browsable like any source
+    // deep inspection: expanding the lens shows the derivation chain AND the code
     g.twin_event(r#"{"type":"open_source","name":"lens:hot-gearboxes"}"#);
-    assert!(g.twin_from(0).contains("exp:tbl"), "lens not browsable as a table");
+    let deep = g.twin_from(0);
+    assert!(deep.contains("exp:tbl"), "lens not browsable as a table");
+    assert!(deep.contains("how this data is derived"), "no derivation chain in the expanded view");
+    assert!(deep.contains("return rows.filter"), "code not shown on deep inspection");
     let seen = g.twin_perceive();
     assert!(seen.contains("lens:hot-gearboxes"), "lens not perceived: {seen}");
+}
+
+#[test]
+fn lenses_compose_and_the_chain_is_shown() {
+    let path = write_temp_csv();
+    let mut g = JsGraph::new_twin();
+    g.twin_read_source("turbines", &path, "mounted");
+    g.twin_agent_tool(
+        r#"{"tool":"make_lens","args":{"name":"Hot gearboxes","description":"Gearboxes above 70.","source":"turbines","code":"return rows.filter(r => Number(r.gearbox_temp) > 70)"}}"#,
+    );
+    // a lens over a lens — composition
+    g.twin_agent_tool(
+        r#"{"tool":"make_lens","args":{"name":"Critical gearboxes","description":"The hot ones above 80.","source":"lens:hot-gearboxes","code":"return rows.filter(r => Number(r.gearbox_temp) > 80)"}}"#,
+    );
+    g.twin_event(r#"{"type":"open_source","name":"lens:critical-gearboxes"}"#);
+    let deep = g.twin_from(0);
+    // the chain reads root → hop → this, in human titles
+    assert!(
+        deep.contains("turbines  →  Hot gearboxes  →  Critical gearboxes"),
+        "derivation chain missing or wrong: {deep}"
+    );
+    assert!(deep.contains("WT-03") , "composed lens rows wrong");
+}
+
+#[test]
+fn describe_gives_sources_human_titles() {
+    let path = write_temp_csv();
+    let mut g = JsGraph::new_twin();
+    g.twin_read_source("turbines", &path, "mounted");
+    g.twin_agent_tool(r#"{"tool":"describe","args":{"source":"turbines","title":"Turbine fleet","description":"All wind turbines with gearbox and vibration readings."}}"#);
+    let muts = g.twin_from(0);
+    assert!(muts.contains("Turbine fleet"), "title not applied to the tile");
+    assert!(muts.contains("All wind turbines"), "description not applied to the tile");
+    assert!(g.twin_perceive().contains("Turbine fleet"), "title not perceived");
 }
 
 #[test]

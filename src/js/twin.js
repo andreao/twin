@@ -31,6 +31,7 @@ const T = (() => {
   const activitySrc = G.source('activity', false);
   const findingsSrc = G.source('findings', false);
   const lensesSrc = G.source('lenses', false);
+  const describeSrc = G.source('describe', false); // human titles/descriptions for any lens or source
 
   // The UI is TWO concepts: the conversation (feed) and the twin — one board of
   // lens tiles that grows as the agent works.  Sources are the rawest lenses;
@@ -89,11 +90,33 @@ const T = (() => {
       findingsPanel.set(r.id, r.severity, r.text, r.source);
     }
   });
+  const srcTitle = (n) => (sources.get(n) || {}).title || n;
   G.observe(lensesSrc, (delta) => {
     for (const [row] of delta.entries()) {
       const r = row.asObject();
-      lenses.set(r.name, { source: r.source, code: r.code, rowcount: r.rowcount, ver: r.ver });
-      lensPanel.set(r.name, r.source, r.code, r.rowcount);
+      lenses.set(r.name, { title: r.title, description: r.description, source: r.source, code: r.code, rowcount: r.rowcount, ver: r.ver });
+      lensPanel.set(r.name, r.title || r.name, r.description || '', srcTitle(r.source), r.rowcount);
+    }
+  });
+  // Descriptions are events too: a re-description folds onto the tile; history stays.
+  G.observe(describeSrc, (delta) => {
+    for (const [row] of delta.entries()) {
+      const r = row.asObject();
+      const s = sources.get(r.name);
+      if (!s) continue;
+      if (r.title) s.title = r.title;
+      if (r.description) s.description = r.description;
+      if (r.name.startsWith('lens:')) {
+        const n = r.name.slice(5);
+        const l = lenses.get(n);
+        if (l) {
+          if (r.title) l.title = r.title;
+          if (r.description) l.description = r.description;
+          lensPanel.set(n, l.title || n, l.description || '', srcTitle(l.source), l.rowcount);
+        }
+      } else {
+        sourcesPanel.set(r.name, s);
+      }
     }
   });
 
@@ -135,7 +158,8 @@ const T = (() => {
     // just a federated source — but we render it as a gallery, not a table.
     if (name === 'documents') {
       const docs = rows.map((r) => ({ name: r.name, bytes: r.bytes || 0, assetIds: r.assetIds || [] }));
-      const info = { kind: 'documents', residence: meta.residence, rowcount: meta.rowcount, docs };
+      const info = { kind: 'documents', residence: meta.residence, rowcount: meta.rowcount, docs,
+        title: meta.title || name, description: meta.description || '' };
       sources.set('documents', info);
       sourcesPanel.set('documents', info);
       append('system', { text: `Mounted “documents” — ${docs.length} files (${meta.residence}).` });
@@ -148,6 +172,7 @@ const T = (() => {
     const schema = inferSchema(rows);
     const info = {
       kind: 'table', residence: meta.residence, locator: meta.locator,
+      title: meta.title || name, description: meta.description || '',
       rowcount: meta.rowcount, materialized: meta.materialized || rows.length,
       schema, sample: rows.slice(0, 3),
     };
@@ -197,9 +222,22 @@ const T = (() => {
     const chartable = name === 'timeseries'; // a sensor row → chart its datapoints
     clearViewer();
     renderModes(name, 'table');
-    vadd('div', 'exp:note', 'explorer-root', 1); vset('exp:note', 'class', 'explorer-note');
+    let i = 1;
+    vadd('div', 'exp:note', 'explorer-root', i++); vset('exp:note', 'class', 'explorer-note');
     vtext('exp:note', `${residenceLabel(s)} · ${cols.length} columns · showing ${rows.length} of ${s.rowcount} rows${chartable ? ' · click a sensor to chart it' : ''}`);
-    vadd('table', 'exp:tbl', 'explorer-root', 2);
+    // deep inspection of a derived lens: what it is, how the data got here (the
+    // composition chain, walked over the from-links), and the exact code of this hop
+    if (s.code) {
+      if (s.description) {
+        vadd('div', 'exp:desc', 'explorer-root', i++); vset('exp:desc', 'class', 'src-desc');
+        vtext('exp:desc', s.description);
+      }
+      vadd('div', 'exp:lin', 'explorer-root', i++); vset('exp:lin', 'class', 'explorer-note');
+      vtext('exp:lin', `how this data is derived:  ${chainOf(name).join('  →  ')}`);
+      vadd('div', 'exp:code', 'explorer-root', i++); vset('exp:code', 'class', 'lens-code');
+      vtext('exp:code', s.code);
+    }
+    vadd('table', 'exp:tbl', 'explorer-root', i);
     vadd('thead', 'exp:thead', 'exp:tbl', 0);
     vadd('tr', 'exp:htr', 'exp:thead', 0);
     cols.forEach((c, i) => { vadd('th', `exp:th:${i}`, 'exp:htr', i); vtext(`exp:th:${i}`, c); });
@@ -512,14 +550,21 @@ const T = (() => {
   // full lineage — source, code, author — is recorded and shown on its card.
   function makeLens(a) {
     const srcName = String(a.source || '');
-    const name = String(a.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'unnamed';
+    // Names must read like a human named them.  Strip any "lens" the model prefixed
+    // (the tile IS a lens — saying so is noise), slug for the stable id, and titleize
+    // for display unless the agent gave an explicit title.
+    const cleaned = String(a.name || '').replace(/^(the\s+)?lens[\s:_-]*/i, '').trim();
+    const name = cleaned.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'unnamed';
+    const words = name.replace(/-/g, ' ');
+    const title = String(a.title || '').trim() || (words.charAt(0).toUpperCase() + words.slice(1));
+    const description = String(a.description || '').trim();
     const id = sourceIds.get(srcName);
-    if (id === undefined) { logActivity(`lens “${name}”: no source “${srcName}” — mount it first`); return; }
+    if (id === undefined) { logActivity(`lens “${title}”: no source “${srcName}” — mount it first`); return; }
     const code = String(a.code || '');
     let out;
     try { out = new Function('rows', code)(G.stateOf(id).support().map((r) => r.asObject())); }
-    catch (err) { logActivity(`lens “${name}” failed: ${err.message}`); return; }
-    if (!Array.isArray(out)) { logActivity(`lens “${name}”: code must return an array of rows`); return; }
+    catch (err) { logActivity(`lens “${title}” failed: ${err.message}`); return; }
+    if (!Array.isArray(out)) { logActivity(`lens “${title}”: code must return an array of rows`); return; }
     out = out.slice(0, 5000).map((r) => (r && typeof r === 'object' ? r : { value: r }));
     const lname = 'lens:' + name;
     // re-authoring the same name = a NEW version; old versions stay in the event log
@@ -529,13 +574,36 @@ const T = (() => {
     G.submit(lid, ZSet.fromRows(out.map((r) => rec(r))), { author: 'agent', origin: 'lens', note: `from ${srcName} v${ver}` });
     const schema = inferSchema(out);
     sources.set(lname, {
-      kind: 'table', residence: 'derived', locator: `lens(${srcName})`,
+      kind: 'table', residence: 'derived', title, description, code, from: srcName,
       rowcount: out.length, materialized: out.length, schema, sample: out.slice(0, 3),
     });
-    G.submit(lensesSrc, ZSet.fromRows([rec({ name, source: srcName, code, rowcount: out.length, ver })]), prov('agent'));
-    logActivity(`authored lens “${name}” — ${out.length} rows from ${srcName}`);
-    const sq = append('view', { text: a.title || `New lens “${name}” — ${out.length} rows derived from ${srcName}`, view: 'table' });
+    G.submit(lensesSrc, ZSet.fromRows([rec({ name, title, description, source: srcName, code, rowcount: out.length, ver })]), prov('agent'));
+    logActivity(`authored lens “${title}” — ${out.length} rows from ${srcTitle(srcName)}`);
+    const sq = append('view', { text: `${title} — ${out.length} rows derived from ${srcName}`, view: 'table' });
     renderTableInto(`item:${sq}:body`, `v${sq}`, out.slice(0, 8), Object.keys(schema));
+  }
+
+  // The composition chain of a derived source: walk the from-links back to the raw
+  // mount, in human titles — "Equipment registry → Unique asset types → this".
+  function chainOf(name) {
+    const parts = [];
+    let cur = name, guard = 0;
+    while (cur && guard++ < 12) {
+      const s = sources.get(cur);
+      if (!s) { parts.unshift(cur); break; }
+      parts.unshift(s.title || cur);
+      cur = s.from;
+    }
+    return parts;
+  }
+
+  // Give any lens or source a better human title/description — an event like all else.
+  function doDescribe(rawName, title, description) {
+    const name = String(rawName || '');
+    const key = sources.has(name) ? name : (sources.has('lens:' + name) ? 'lens:' + name : null);
+    if (!key) { logActivity(`describe: no lens or source “${name}”`); return; }
+    G.submit(describeSrc, ZSet.fromRows([rec({ name: key, title: String(title || ''), description: String(description || '') })]), prov('agent'));
+    logActivity(`described “${(sources.get(key) || {}).title || key}”`);
   }
 
   // The agent inspects a source: quick stats + data-quality signals (empties,
@@ -725,6 +793,7 @@ const T = (() => {
       }
       case 'finding': addFinding(a); break;
       case 'make_lens': makeLens(a); break;
+      case 'describe': doDescribe(a.source || a.name || a.lens, a.title, a.description); break;
       case 'idle': break; // "nothing worth doing" — pacing lives in the Rust harness
       // read_source is effectful: handled at the Rust boundary, which calls mountSource.
       default: if (a.text) append('agent', { text: String(a.text) }); break;
@@ -796,7 +865,8 @@ const T = (() => {
   function perceive() {
     const recent = feed.items.slice(-40).map((it) => ({ kind: it.kind, text: it.text, options: it.options }));
     const srcs = [...sources].map(([name, s]) => ({
-      name, residence: s.residence, rowcount: s.rowcount, schema: s.schema, sample: s.sample,
+      name, title: s.title, description: s.description,
+      residence: s.residence, rowcount: s.rowcount, schema: s.schema, sample: s.sample,
     }));
     const sks = [...skills].map(([name, s]) => ({ name, description: s.description }));
     const ag = [...agenda].map(([id, a]) => ({ id, text: a.text, status: a.status }));
@@ -807,7 +877,7 @@ const T = (() => {
       agenda: ag.filter((a) => a.status !== 'done').slice(0, 12),
       agendaDone: ag.filter((a) => a.status === 'done').length,
       findings: [...findings.values()].slice(-8).map((f) => ({ severity: f.severity, text: f.text })),
-      lenses: [...lenses].map(([name, l]) => ({ name: 'lens:' + name, source: l.source, rowcount: l.rowcount })),
+      lenses: [...lenses].map(([name, l]) => ({ name: 'lens:' + name, title: l.title, description: l.description, source: l.source, rowcount: l.rowcount })),
       activity: activityTail.slice(-8),
       userActions: userActions.slice(-10),
       feed: recent,

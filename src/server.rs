@@ -102,6 +102,18 @@ fn graph_loop(rx: Receiver<Cmd>, wake: Sender<()>) {
                 }
                 let status = g.twin_read_source(name, path, residence);
                 println!("{status}");
+                // human title/description come from the manifest too — folded in as a
+                // describe event, the same path the agent uses (§8: everything is events)
+                let title = entry["title"].as_str().unwrap_or("");
+                let desc = entry["description"].as_str().unwrap_or("");
+                if !title.is_empty() || !desc.is_empty() {
+                    let tool = serde_json::json!({
+                        "tool": "describe",
+                        "args": { "source": name, "title": title, "description": desc }
+                    })
+                    .to_string();
+                    g.twin_agent_tool(&tool);
+                }
             }
         }
     }

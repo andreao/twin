@@ -120,23 +120,31 @@ class SourcesPanel {
       : meta.residence === 'mounted' ? `federated · live · ${meta.rowcount} rows`
       : meta.residence === 'mounted-partial' ? `federated · ${meta.materialized} of ${meta.rowcount} local`
       : `${meta.residence} · ${meta.rowcount} rows`;
-    const detail = resid;
+    const title = meta.title || name;
+    const desc = meta.description || '';
+    const rk = `sr:${name}`;
     if (this.names.has(name)) {
       this.names.set(name, meta);
-      this._emit({ op: 'setText', key: `sr:${name}:d`, text: detail });
+      this._emit({ op: 'setAttr', key: rk, name: 'data-title', value: title });
+      this._emit({ op: 'setText', key: `${rk}:n`, text: title });
+      this._emit({ op: 'setText', key: `${rk}:desc`, text: desc });
+      this._emit({ op: 'setText', key: `${rk}:d`, text: resid });
       return;
     }
     const i = this.names.size;
     this.names.set(name, meta);
-    const rk = `sr:${name}`;
     this._emit({ op: 'create', key: rk, tag: 'div', parent: this.root, index: i });
     this._emit({ op: 'setAttr', key: rk, name: 'class', value: 'src-row' });
+    this._emit({ op: 'setAttr', key: rk, name: 'data-title', value: title });
     this._emit({ op: 'create', key: `${rk}:n`, tag: 'div', parent: rk, index: 0 });
     this._emit({ op: 'setAttr', key: `${rk}:n`, name: 'class', value: 'src-n' });
-    this._emit({ op: 'setText', key: `${rk}:n`, text: name });
-    this._emit({ op: 'create', key: `${rk}:d`, tag: 'div', parent: rk, index: 1 });
+    this._emit({ op: 'setText', key: `${rk}:n`, text: title });
+    this._emit({ op: 'create', key: `${rk}:desc`, tag: 'div', parent: rk, index: 1 });
+    this._emit({ op: 'setAttr', key: `${rk}:desc`, name: 'class', value: 'src-desc' });
+    this._emit({ op: 'setText', key: `${rk}:desc`, text: desc });
+    this._emit({ op: 'create', key: `${rk}:d`, tag: 'div', parent: rk, index: 2 });
     this._emit({ op: 'setAttr', key: `${rk}:d`, name: 'class', value: 'src-d' });
-    this._emit({ op: 'setText', key: `${rk}:d`, text: detail });
+    this._emit({ op: 'setText', key: `${rk}:d`, text: resid });
   }
 }
 
@@ -159,10 +167,13 @@ class AgendaPanel {
     this.items.set(id, { text: text || prev.text || '', status });
     const all = [...this.items.values()];
     const open = all.filter((i) => i.status !== 'done');
-    const active = all.find((i) => i.status === 'active') || open[0];
-    const line = active
-      ? `plan: ${active.text}${open.length > 1 ? `  (+${open.length - 1} more)` : ''}`
-      : (all.length ? 'plan: all done' : '');
+    const active = all.find((i) => i.status === 'active');
+    // the strip's activity slot already says what's happening NOW, so this line
+    // shows what comes NEXT (the open items beyond the active one)
+    const next = open.filter((i) => i !== active);
+    const line = next.length
+      ? `next: ${next[0].text}${next.length > 1 ? `  (+${next.length - 1})` : ''}`
+      : (all.length && !open.length ? 'plan: all done' : '');
     TWIN_MUT.push({ op: 'setText', key: this.key, text: line });
   }
 }
@@ -217,8 +228,9 @@ class FindingsPanel {
   }
 }
 
-// Agent-authored lenses (§4.1: lenses are data) — the Artifacts page.  Each card
-// carries the lens's full lineage: which source, what code, who authored it.
+// Agent-authored lenses (§4.1: lenses are data) — tiles on the twin board.  The
+// tile shows the lens's human TITLE and its lineage in words; the code is part of
+// the deeper inspection (the expanded view), not the board.
 class LensPanel {
   constructor(root = 'board-root') {
     this.root = root;
@@ -226,27 +238,30 @@ class LensPanel {
   }
   _emit(m) { TWIN_MUT.push(m); }
 
-  set(name, source, code, rowcount) {
+  set(name, title, description, sourceTitle, rowcount) {
     const rk = `ln:${name}`;
-    const meta = `derived from ${source} · ${rowcount} rows · authored by the agent`;
+    const meta = `a lens over ${sourceTitle} · ${rowcount} rows · by the agent`;
     if (this.names.has(name)) {
+      this._emit({ op: 'setAttr', key: rk, name: 'data-title', value: title });
+      this._emit({ op: 'setText', key: `${rk}:n`, text: title });
+      this._emit({ op: 'setText', key: `${rk}:desc`, text: description });
       this._emit({ op: 'setText', key: `${rk}:d`, text: meta });
-      this._emit({ op: 'setText', key: `${rk}:c`, text: code });
       return;
     }
     const i = this.names.size;
     this.names.set(name, true);
     this._emit({ op: 'create', key: rk, tag: 'div', parent: this.root, index: i });
     this._emit({ op: 'setAttr', key: rk, name: 'class', value: 'src-row lens-card' });
+    this._emit({ op: 'setAttr', key: rk, name: 'data-title', value: title });
     this._emit({ op: 'create', key: `${rk}:n`, tag: 'div', parent: rk, index: 0 });
     this._emit({ op: 'setAttr', key: `${rk}:n`, name: 'class', value: 'src-n' });
-    this._emit({ op: 'setText', key: `${rk}:n`, text: `lens:${name}` });
-    this._emit({ op: 'create', key: `${rk}:d`, tag: 'div', parent: rk, index: 1 });
+    this._emit({ op: 'setText', key: `${rk}:n`, text: title });
+    this._emit({ op: 'create', key: `${rk}:desc`, tag: 'div', parent: rk, index: 1 });
+    this._emit({ op: 'setAttr', key: `${rk}:desc`, name: 'class', value: 'src-desc' });
+    this._emit({ op: 'setText', key: `${rk}:desc`, text: description });
+    this._emit({ op: 'create', key: `${rk}:d`, tag: 'div', parent: rk, index: 2 });
     this._emit({ op: 'setAttr', key: `${rk}:d`, name: 'class', value: 'src-d' });
     this._emit({ op: 'setText', key: `${rk}:d`, text: meta });
-    this._emit({ op: 'create', key: `${rk}:c`, tag: 'div', parent: rk, index: 2 });
-    this._emit({ op: 'setAttr', key: `${rk}:c`, name: 'class', value: 'lens-code' });
-    this._emit({ op: 'setText', key: `${rk}:c`, text: code });
   }
 }
 

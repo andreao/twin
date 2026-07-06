@@ -1,9 +1,33 @@
 {
-  "_comment": "Domain-neutral mount manifest (§7 residence). The CORE loops over these {name,path,residence} entries and mounts each generically — it never interprets the names. All domain vocabulary (assets/timeseries/events/documents) lives HERE, in data, not in the Rust core.",
+  "_comment": "Domain-neutral mount manifest (§7 residence). The CORE loops over these entries and mounts each generically — it never interprets the names. All domain vocabulary (what an 'asset' is, how to describe it) lives HERE, in data, or in lens-space.",
   "mounts": [
-    { "name": "assets", "path": "data/cognite/assets.csv", "residence": "mounted" },
-    { "name": "timeseries", "path": "data/cognite/timeseries.csv", "residence": "mounted" },
-    { "name": "events", "path": "data/cognite/events.csv", "residence": "mounted" },
-    { "name": "documents", "path": "data/cognite/files.json", "residence": "mounted" }
+    {
+      "name": "assets",
+      "path": "data/cognite/assets.csv",
+      "residence": "mounted",
+      "title": "Equipment registry",
+      "description": "Every tagged piece of equipment on the platform — compressors, pumps, valves — with its place in the plant hierarchy."
+    },
+    {
+      "name": "timeseries",
+      "path": "data/cognite/timeseries.csv",
+      "residence": "mounted",
+      "title": "Sensor catalogue",
+      "description": "The live instruments: temperature, pressure, flow and more, each linked to the equipment it measures."
+    },
+    {
+      "name": "events",
+      "path": "data/cognite/events.csv",
+      "residence": "mounted",
+      "title": "Maintenance history",
+      "description": "Work orders and maintenance events, each tied to the equipment it touched."
+    },
+    {
+      "name": "documents",
+      "path": "data/cognite/files.json",
+      "residence": "mounted",
+      "title": "Drawings & documents",
+      "description": "P&IDs, technical drawings and training material for the platform."
+    }
   ]
 }
