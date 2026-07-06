@@ -96,14 +96,33 @@ Rules:
 /// Appended to background turns: the agent's own work time, and how to spend it.
 const BACKGROUND_BRIEF: &str = "BACKGROUND TURN — the user has NOT spoken; this is your own work time on your own compute. Do real proactive work now: keep your agenda current (plan / work / done); inspect sources you haven't profiled (check activity for what you already did); record data issues or insights as findings; author a lens with make_lens when you see a useful derivation; infer the user's goals from userActions and record_profile them. NARRATE WHAT MATTERS: if this turn produced something the user should understand — a lens you built, an issue you found, a pattern you noticed — END the turn with ONE short `say` (1–2 sentences, plain language) explaining WHAT you did and WHY it matters, so the cards in the chat never appear without context. If the work was routine (just profiling, planning), end quietly without `say`. If ONE pointed question would unblock better work, use `ask` — it waits for the user as a card. If there is truly nothing left worth doing, emit {\"tool\":\"idle\",\"args\":{}}.";
 
+/// Why the agent is being woken.
+pub enum Wake {
+    /// The user addressed it (message / answered a card) — run a foreground turn.
+    Steer,
+    /// The user is PRESENT (opened or reloaded the app) — tighten the cadence and
+    /// get to work immediately; nobody should reload into a sleeping twin.
+    Presence,
+}
+
 /// Spawn the agent thread. Returns a wake channel the graph pokes on user input.
-pub fn spawn(tx: Sender<Cmd>) -> Sender<()> {
-    let (wake_tx, wake_rx) = mpsc::channel::<()>();
+pub fn spawn(tx: Sender<Cmd>) -> Sender<Wake> {
+    let (wake_tx, wake_rx) = mpsc::channel::<Wake>();
     thread::spawn(move || agent_loop(tx, wake_rx));
     wake_tx
 }
 
-fn agent_loop(tx: Sender<Cmd>, wake_rx: Receiver<()>) {
+/// Coalesce a burst of queued wakes; a Steer anywhere in the burst wins.
+fn drain(wake_rx: &Receiver<Wake>, mut w: Wake) -> Wake {
+    while let Ok(next) = wake_rx.try_recv() {
+        if matches!(next, Wake::Steer) {
+            w = Wake::Steer;
+        }
+    }
+    w
+}
+
+fn agent_loop(tx: Sender<Cmd>, wake_rx: Receiver<Wake>) {
     let model = std::env::var("TWIN_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
     // The agent itself opens the conversation — a real model turn (with the thinking
     // indicator), not a canned string, so it's clearly the agent talking.
@@ -111,17 +130,26 @@ fn agent_loop(tx: Sender<Cmd>, wake_rx: Receiver<()>) {
     let mut idle = BG_FIRST_IDLE;
     loop {
         match wake_rx.recv_timeout(idle) {
-            // the user steered — coalesce a burst of wakes into one foreground turn
-            Ok(()) => {
-                while wake_rx.try_recv().is_ok() {}
-                run_turn(&tx, &model, Mode::Foreground, &wake_rx);
-                idle = BG_FIRST_IDLE;
+            Ok(w) => {
+                let mode = match drain(&wake_rx, w) {
+                    Wake::Steer => Mode::Foreground,
+                    Wake::Presence => Mode::Background,
+                };
+                match run_turn(&tx, &model, mode, &wake_rx) {
+                    Outcome::Preempted => {
+                        drain(&wake_rx, Wake::Steer);
+                        run_turn(&tx, &model, Mode::Foreground, &wake_rx);
+                        idle = BG_FIRST_IDLE;
+                    }
+                    Outcome::Acted => idle = BG_BETWEEN,
+                    Outcome::Idled => idle = BG_FIRST_IDLE, // just woken — stay attentive
+                }
             }
             // quiet — the agent's own work time
             Err(RecvTimeoutError::Timeout) => {
                 match run_turn(&tx, &model, Mode::Background, &wake_rx) {
                     Outcome::Preempted => {
-                        while wake_rx.try_recv().is_ok() {}
+                        drain(&wake_rx, Wake::Steer);
                         run_turn(&tx, &model, Mode::Foreground, &wake_rx);
                         idle = BG_FIRST_IDLE;
                     }
@@ -138,7 +166,7 @@ fn agent_loop(tx: Sender<Cmd>, wake_rx: Receiver<()>) {
 /// (say/ask/idle) or hits the step cap. Thoughts are capped at one per turn so the
 /// model can't loop on "thinking" without acting. Background turns check the wake
 /// channel before every model call so the user preempts multi-second work instantly.
-fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<()>) -> Outcome {
+fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) -> Outcome {
     let background = mode == Mode::Background;
     tx.send(Cmd::Status { working: true, background }).ok();
     let mut thoughts = 0;
@@ -150,10 +178,17 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<()>) -> O
     let mut emitted: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut suppressed = false;
     let mut stuck = 0;
+    let mut idle_overridden = false;
+    let mut idle_item: Option<String> = None;
     for _ in 0..MAX_STEPS {
-        if background && wake.try_recv().is_ok() {
-            preempted = true;
-            break;
+        if background {
+            if let Ok(w) = wake.try_recv() {
+                if matches!(w, Wake::Steer) {
+                    preempted = true;
+                    break;
+                }
+                // a Presence poke mid-work is already satisfied — we ARE working
+            }
         }
         let ctx = perceive(tx);
         // Deterministic nudges — small local models need hard rails, not suggestions:
@@ -182,6 +217,12 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<()>) -> O
                 "\n\nYou ALREADY made that exact tool call this turn — it was applied ONCE and its result is in your context. Do NOT emit it again. Do something DIFFERENT, or end the turn (say / ask / idle).",
             );
         }
+        if let Some(item) = &idle_item {
+            nudge.push_str(&format!(
+                "\n\nYou said idle, but your agenda still has open items — next up: “{item}”. Idle is NOT allowed while the agenda has work. Do a real step on it NOW (inspect / make_lens / finding / show / work), or mark it done if it truly is."
+            ));
+            idle_item = None;
+        }
         let content = match call_model(model, &ctx, &nudge) {
             Ok(c) => c,
             Err(e) => {
@@ -199,7 +240,17 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<()>) -> O
         });
         let name = tool_name(&tool);
         if name == "idle" {
-            break; // nothing worth doing — not forwarded, just paces the loop
+            // idling with an open agenda is a model failure, not a fact about the
+            // world — override it once with a hard rail before accepting.
+            if !idle_overridden {
+                if let Some(item) = agenda_head(&ctx) {
+                    eprintln!("[agent{}] idle overridden — agenda has: {item}", if background { "·bg" } else { "" });
+                    idle_overridden = true;
+                    idle_item = Some(item);
+                    continue;
+                }
+            }
+            break; // genuinely nothing worth doing — paces the loop
         }
         if name == "think" {
             thoughts += 1;
@@ -265,6 +316,17 @@ fn dedup_key(tool_json: &str) -> String {
         "record_profile" => format!("record_profile:{}", s("field")),
         _ => tool_json.to_string(),
     }
+}
+
+/// The first open agenda item in the perception JSON, if any — the ground truth the
+/// idle-override rail checks the model's "nothing to do" claim against.
+fn agenda_head(ctx: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(ctx).ok()?;
+    v["agenda"]
+        .as_array()?
+        .first()
+        .and_then(|it| it["text"].as_str())
+        .map(String::from)
 }
 
 /// If the last user message carries a data-file path and no source is mounted yet,

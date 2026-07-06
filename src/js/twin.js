@@ -107,6 +107,7 @@ const T = (() => {
       if (!s) continue;
       if (r.title) s.title = r.title;
       if (r.description) s.description = r.description;
+      if (r.origin) s.origin = r.origin;
       if (r.name.startsWith('lens:')) {
         const n = r.name.slice(5);
         const l = lenses.get(n);
@@ -193,9 +194,10 @@ const T = (() => {
   // The quiet facts line of a mount card — separate from the description, so prose
   // never runs into numbers.
   function mountMeta(s) {
+    const origin = s.origin ? ` · from ${s.origin}` : '';
     return s.kind === 'documents'
-      ? `${(s.docs || []).length} files · ${residenceLabel(s)}`
-      : `${s.rowcount} rows · ${Object.keys(s.schema || {}).length} columns · ${residenceLabel(s)}`;
+      ? `${(s.docs || []).length} files · ${residenceLabel(s)}${origin}`
+      : `${s.rowcount} rows · ${Object.keys(s.schema || {}).length} columns · ${residenceLabel(s)}${origin}`;
   }
 
   // A compact ACTION CARD in the chat: work that was done (by the agent or the
@@ -558,11 +560,16 @@ const T = (() => {
   }
 
   // Install a skill (§4.1) — called by the core skills-loader from the static dir.
+  // A skill is part of the twin's ORIGIN STORY, so it reads as the first chapter of
+  // the chat history: this capability exists, and the data that follows came by it.
   function installSkill(name, meta) {
     if (skills.has(name)) return;
     const title = meta.title || name;
-    skills.set(name, { title, description: meta.description || '', files: meta.files || [] });
+    const files = meta.files || [];
+    skills.set(name, { title, description: meta.description || '', files });
     G.submit(skillsSrc, ZSet.fromRows([rec({ name, title, description: meta.description || '' })]), prov('core'));
+    workCard(`Installed skill — ${title}`, meta.description || '',
+      files.length ? `capability “${name}” · tooling: ${files.join(', ')}` : `capability “${name}”`, null);
   }
 
   // ---- the agent's working state (agenda / activity / findings) ---------------
@@ -707,11 +714,13 @@ const T = (() => {
   }
 
   // Give any lens or source a better human title/description — an event like all else.
-  function doDescribe(rawName, title, description) {
+  function doDescribe(rawName, title, description, origin) {
     const name = String(rawName || '');
     const key = sources.has(name) ? name : (sources.has('lens:' + name) ? 'lens:' + name : null);
     if (!key) { logActivity(`describe: no lens or source “${name}”`); return; }
-    G.submit(describeSrc, ZSet.fromRows([rec({ name: key, title: String(title || ''), description: String(description || '') })]), prov('agent'));
+    G.submit(describeSrc, ZSet.fromRows([rec({
+      name: key, title: String(title || ''), description: String(description || ''), origin: String(origin || ''),
+    })]), prov('agent'));
     logActivity(`described “${(sources.get(key) || {}).title || key}”`);
   }
 
@@ -917,7 +926,7 @@ const T = (() => {
       }
       case 'finding': addFinding(a); break;
       case 'make_lens': makeLens(a); break;
-      case 'describe': doDescribe(a.source || a.name || a.lens, a.title, a.description); break;
+      case 'describe': doDescribe(a.source || a.name || a.lens, a.title, a.description, a.origin); break;
       case 'idle': break; // "nothing worth doing" — pacing lives in the Rust harness
       // read_source is effectful: handled at the Rust boundary, which calls mountSource.
       default: if (a.text) append('agent', { text: String(a.text) }); break;

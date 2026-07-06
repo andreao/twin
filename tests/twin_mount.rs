@@ -374,6 +374,20 @@ fn lenses_compose_and_the_chain_is_shown() {
 }
 
 #[test]
+fn the_history_tells_the_origin_story() {
+    let path = write_temp_csv();
+    let mut g = JsGraph::new_twin();
+    // chapter 1: a capability exists
+    g.twin_install_skill("obtain-oid", "Obtain open industrial data", "Pulls real oil-&-gas data from Cognite's public Valhall dataset.", &[]);
+    // chapter 2: data arrives through it, with provenance on the mount card
+    g.twin_read_source("turbines", &path, "mounted");
+    g.twin_agent_tool(r#"{"tool":"describe","args":{"source":"turbines","title":"Turbine fleet","description":"All turbines.","origin":"Cognite CDF (Valhall) · via skill obtain-oid"}}"#);
+    let muts = g.twin_from(0);
+    assert!(muts.contains("Installed skill — Obtain open industrial data"), "no skill card: {muts}");
+    assert!(muts.contains("from Cognite CDF (Valhall)"), "mount card carries no provenance");
+}
+
+#[test]
 fn describe_gives_sources_human_titles() {
     let path = write_temp_csv();
     let mut g = JsGraph::new_twin();

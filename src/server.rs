@@ -72,7 +72,7 @@ pub fn serve(addr: &str) -> std::io::Result<()> {
 }
 
 /// Owns the V8 graph; serializes all edits. Broadcasts new mutation slices + status.
-fn graph_loop(rx: Receiver<Cmd>, wake: Sender<()>) {
+fn graph_loop(rx: Receiver<Cmd>, wake: Sender<agent::Wake>) {
     let mut g = JsGraph::new_twin();
 
     // Core skills-loader (§4.1, §11.13): seed the twin's skill registry from the static
@@ -106,10 +106,11 @@ fn graph_loop(rx: Receiver<Cmd>, wake: Sender<()>) {
                 // describe event, the same path the agent uses (§8: everything is events)
                 let title = entry["title"].as_str().unwrap_or("");
                 let desc = entry["description"].as_str().unwrap_or("");
-                if !title.is_empty() || !desc.is_empty() {
+                let origin = entry["origin"].as_str().unwrap_or("");
+                if !title.is_empty() || !desc.is_empty() || !origin.is_empty() {
                     let tool = serde_json::json!({
                         "tool": "describe",
-                        "args": { "source": name, "title": title, "description": desc }
+                        "args": { "source": name, "title": title, "description": desc, "origin": origin }
                     })
                     .to_string();
                     g.twin_agent_tool(&tool);
@@ -130,6 +131,9 @@ fn graph_loop(rx: Receiver<Cmd>, wake: Sender<()>) {
                 if tx.send(snapshot).is_ok() {
                     clients.push(tx);
                 }
+                // the user just showed up — the agent should be seen working, not
+                // dozing at the far end of its idle backoff
+                wake.send(agent::Wake::Presence).ok();
             }
             Cmd::Event(json) => {
                 let mut ev: Option<serde_json::Value> = serde_json::from_str(&json).ok();
@@ -160,7 +164,7 @@ fn graph_loop(rx: Receiver<Cmd>, wake: Sender<()>) {
                 // wake the agent when the user addressed it (typed or answered a card);
                 // pure navigation is still captured raw, and perceived on the next turn.
                 if etype == "user_message" || etype == "choose" {
-                    wake.send(()).ok();
+                    wake.send(agent::Wake::Steer).ok();
                 }
             }
             Cmd::AgentTool(json) => {

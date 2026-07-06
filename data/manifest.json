@@ -6,28 +6,32 @@
       "path": "data/cognite/assets.csv",
       "residence": "mounted",
       "title": "Equipment registry",
-      "description": "Every tagged piece of equipment on the platform — compressors, pumps, valves — with its place in the plant hierarchy."
+      "description": "Every tagged piece of equipment on the platform — compressors, pumps, valves — with its place in the plant hierarchy.",
+      "origin": "Cognite CDF (Valhall platform) · via skill obtain-oid"
     },
     {
       "name": "timeseries",
       "path": "data/cognite/timeseries.csv",
       "residence": "mounted",
       "title": "Sensor catalogue",
-      "description": "The live instruments: temperature, pressure, flow and more, each linked to the equipment it measures."
+      "description": "The live instruments: temperature, pressure, flow and more, each linked to the equipment it measures.",
+      "origin": "Cognite CDF (Valhall platform) · via skill obtain-oid"
     },
     {
       "name": "events",
       "path": "data/cognite/events.csv",
       "residence": "mounted",
       "title": "Maintenance history",
-      "description": "Work orders and maintenance events, each tied to the equipment it touched."
+      "description": "Work orders and maintenance events, each tied to the equipment it touched.",
+      "origin": "Cognite CDF (Valhall platform) · via skill obtain-oid"
     },
     {
       "name": "documents",
       "path": "data/cognite/files.json",
       "residence": "mounted",
       "title": "Drawings & documents",
-      "description": "P&IDs, technical drawings and training material for the platform."
+      "description": "P&IDs, technical drawings and training material for the platform.",
+      "origin": "Cognite CDF (Valhall platform) · via skill obtain-oid"
     }
   ]
 }
