@@ -25,9 +25,17 @@
   .chip { border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 99px; padding: 4px 12px; font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; flex: none; transition: border-color .12s, background .12s; }
   .chip:hover { border-color: var(--accent); background: var(--accent-soft); }
   .chip.starred { color: #7a4a38; background: var(--accent-soft); border-color: #eeddd4; }
-  .status { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 7px; flex: none; margin-left: auto; }
+  .status { position: relative; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 7px; flex: none; margin-left: auto; cursor: pointer; padding: 4px 8px; border-radius: 8px; }
+  .status:hover { background: var(--bg); }
   .status .dot { width: 7px; height: 7px; border-radius: 50%; background: #ccc; }
   .status.live .dot { background: #4a9d5b; }
+  .status.live.paused .dot { background: #d9902a; }
+  /* the twin's run control: click the live chip → pause/resume background work */
+  .status-menu { position: absolute; top: 30px; right: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 28px rgba(30,26,20,.12); padding: 4px; display: none; z-index: 30; min-width: 200px; }
+  .status-menu.open { display: block; }
+  .status-menu button { display: block; width: 100%; text-align: left; border: none; background: none; font: inherit; font-size: 12.5px; padding: 8px 11px; border-radius: 7px; cursor: pointer; color: var(--ink); }
+  .status-menu button:hover { background: var(--accent-soft); }
+  .status-menu .menu-note { font-size: 11px; color: var(--muted); padding: 2px 11px 6px; }
 
   /* ---- chat front and center; detail stack slides in on the right ---- */
   .app { flex: 1; min-height: 0; display: flex; overflow: hidden; }
@@ -89,12 +97,30 @@
   .act-row { display: flex; gap: 12px; align-items: baseline; font-size: 13px; padding: 7px 8px; line-height: 1.5; border-bottom: 1px solid var(--line); }
   .act-row:last-child { border-bottom: none; }
   .act-verb { flex: none; width: 68px; color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; padding-top: 1px; }
+  .act-content { flex: 1; min-width: 0; }
   .act-text { flex: 1; min-width: 0; color: var(--ink); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-  .act-row[data-title] { cursor: pointer; }
-  .act-row[data-title]:hover .act-text { color: var(--accent); }
+  /* the quiet facts line: numbers, errors, lineage — never mixed into the prose */
+  .act-detail { color: var(--muted); font-size: 11.5px; margin-top: 2px; line-height: 1.45; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .act-row.t-error .act-verb { color: #8a2e20; font-weight: 700; }
+  .act-row.t-error .act-detail { color: #8a2e20; opacity: .75; }
+  .act-row.t-warn .act-verb { color: #8a5a14; font-weight: 700; }
+  .act-row[data-title], .act-row.openable { cursor: pointer; }
+  .act-row[data-title]:hover .act-text, .act-row.openable:hover .act-text { color: var(--accent); }
+  .act-open { flex: none; color: var(--muted); font-size: 14px; align-self: center; }
+  .act-row.openable:hover .act-open { color: var(--accent); }
   .act-row.is-now .act-verb { color: var(--accent); font-weight: 700; }
   .act-row.is-done { opacity: .55; }
   .act-row.is-done .act-text { text-decoration: line-through; }
+
+  /* a task's page: title once (the panel tab just says Task), a live now-line,
+     actions before any list */
+  .task-title { font-size: 17px; font-weight: 650; line-height: 1.45; max-width: 58ch; }
+  .task-now { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+  .agent-now { margin: 0 0 4px; font-size: 13px; color: var(--ink); }
+  .now-dot.live { background: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
+  /* results: a produced issue is tinted like findings everywhere else */
+  .sens-row.res-issue { border-left: 3px solid #d9902a; }
+  .sens-row.res-issue.crit { border-left-color: #8a2e20; }
   /* task status chips share the finding-chip grammar */
   .fd-sev.task-active { background: var(--accent-soft); color: #7a4a38; }
   .fd-sev.task-open { background: var(--bg); color: var(--muted); border: 1px solid var(--line); }
@@ -104,17 +130,8 @@
   .feed-item.view .doc-frame { width: 100%; height: 44vh; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
   .feed-item.view .doc-img { max-width: 100%; border: 1px solid var(--line); border-radius: 8px; }
 
-  /* the in-progress card: what's being worked on right now, shaped like the action
-     card it will become — the spinner alone says "in progress" */
-  .working { max-width: 712px; margin: 0 auto 6px; width: calc(100% - 48px); padding: 10px 14px; display: none; align-items: center; gap: 11px; background: var(--bg); border: 1px dashed var(--line); border-radius: 12px; cursor: pointer; }
-  .working.on { display: flex; }
-  .working:hover .working-title { color: var(--accent); }
-  .working-body { flex: 1; min-width: 0; }
-  .working-title { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .working-sub { color: var(--muted); font-size: 12px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .working-sub:empty { display: none; }
-  .spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--accent-soft); border-top-color: var(--accent); animation: spin .7s linear infinite; }
-  @keyframes spin { to { transform: rotate(360deg); } }
+  /* ONE live-status surface: the status bar below the composer.  (No second
+     in-progress card above the chat — that was a duplicate status bar.) */
 
   .composer { padding: 8px 18px 0; }
   .composer-inner { max-width: 760px; margin: 0 auto; display: flex; gap: 10px; align-items: flex-end; background: var(--bg); border: 1px solid var(--line); border-radius: 14px; padding: 8px 8px 8px 14px; }
@@ -243,13 +260,6 @@
   <!-- the conversation: front and center, time as the vertical axis -->
   <section class="conv">
     <div class="feedwrap" id="feedwrap"><div class="feed" id="feed-root"></div></div>
-    <div class="working" id="working">
-      <span class="spin"></span>
-      <div class="working-body">
-        <div class="working-title" id="working-title">Working…</div>
-        <div class="working-sub" id="working-text"></div>
-      </div>
-    </div>
     <div class="composer" id="composer">
       <div class="composer-inner">
         <textarea id="input" rows="1" placeholder="Ask, steer, or point the agent at data…"></textarea>
@@ -294,26 +304,48 @@
   const feedwrap = document.getElementById("feedwrap");
   const statusEl = document.getElementById("status");
   const statusText = document.getElementById("statustext");
-  const workingEl = document.getElementById("working");
-  const workingText = document.getElementById("working-text");
-  const workingTitle = document.getElementById("working-title");
   const statusLine = document.getElementById("status-line");
-  let statusOn = false, statusBg = false;
-  // one composed sentence for the strip and the in-progress card, from the fold
-  // slots (active item / last action / next item) — a single truncation point
+  let statusOn = false, statusBg = false, twinPaused = false, wsLive = false;
+  // one composed sentence for the status bar, from the fold slots
+  // (active item / last action / next item) — a single truncation point
   function refreshWorking() {
     const doing = document.getElementById("agent-doing").textContent;
     const act = document.getElementById("agent-act").textContent;
     const plan = document.getElementById("agent-plan").textContent;
     if (statusOn) {
-      statusLine.textContent = statusBg ? ((doing || "working") + (act ? " — " + act : "")) : "thinking…";
-      workingTitle.textContent = statusBg ? (doing || "Working on the twin") : "Thinking";
-      workingText.textContent = act;
+      statusLine.textContent = statusBg ? ((doing || "working") + (act ? " · " + act : "")) : "thinking…";
+    } else if (twinPaused) {
+      statusLine.textContent = "paused";
     } else {
       // between turns: "waiting" while there's open work; "idle" only when there's none
       statusLine.textContent = (plan || doing) ? `waiting · ${plan || "on: " + doing}` : "idle";
     }
   }
+
+  // ---- the run control: the live chip is a dropdown — pause/resume the twin ----
+  const statusMenu = document.createElement("div");
+  statusMenu.className = "status-menu";
+  const menuNote = document.createElement("div");
+  menuNote.className = "menu-note";
+  const pauseBtn = document.createElement("button");
+  statusMenu.append(pauseBtn, menuNote);
+  statusEl.appendChild(statusMenu);
+  function renderTwinState() {
+    statusEl.classList.toggle("paused", twinPaused);
+    if (wsLive) statusText.textContent = twinPaused ? "paused" : "live";
+    pauseBtn.textContent = twinPaused ? "Resume the twin" : "Pause the twin";
+    menuNote.textContent = twinPaused
+      ? "It will answer you, but does no work of its own."
+      : "Stops background work; it still answers when you write.";
+    refreshWorking();
+  }
+  pauseBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    send({ type: twinPaused ? "resume" : "pause" });
+    statusMenu.classList.remove("open");
+  });
+  statusEl.addEventListener("click", () => statusMenu.classList.toggle("open"));
+  document.addEventListener("click", (e) => { if (!statusEl.contains(e.target)) statusMenu.classList.remove("open"); });
   const input = document.getElementById("input");
   const sendBtn = document.getElementById("send");
   const appEl = document.getElementById("app");
@@ -366,9 +398,9 @@
   let freshSnapshot = false; // the first batch after (re)connect = full history replay
   function connect() {
     ws = new WebSocket(`ws://${location.host}/ws`);
-    ws.onopen = () => { resetDom(); freshSnapshot = true; statusEl.classList.add("live"); statusText.textContent = "live"; };
+    ws.onopen = () => { resetDom(); freshSnapshot = true; wsLive = true; statusEl.classList.add("live"); renderTwinState(); };
     ws.onclose = () => {
-      statusEl.classList.remove("live"); statusText.textContent = "reconnecting…";
+      wsLive = false; statusEl.classList.remove("live"); statusText.textContent = "reconnecting…";
       setTimeout(connect, 1000);
     };
     ws.onmessage = (e) => {
@@ -391,10 +423,13 @@
       }
       else if (msg.type === "status") {
         statusOn = !!msg.working; statusBg = !!msg.background;
-        workingEl.classList.toggle("on", statusOn);
         statusbar.classList.toggle("on", statusOn);
         refreshWorking();
         autoscroll();
+      }
+      else if (msg.type === "twin") {
+        twinPaused = !!msg.paused;
+        renderTwinState();
       }
     };
   }
@@ -475,14 +510,8 @@
     openPanel(i, title, ev);
     send(Object.assign({}, ev, { panel: i, title: title || "" }));
   }
-  // the status bar and the in-progress card open the Agent page; "the twin ▸" opens the board
+  // the status bar opens the Agent page; "the twin ▸" opens the board
   statusbar.addEventListener("click", () => openFromEv(0, "What’s happening", { type: "open_agent" }));
-  // the in-progress card is the ACTIVE TASK's card — clicking it opens that task
-  workingEl.addEventListener("click", () => {
-    const tid = document.getElementById("agent-doing-id").textContent;
-    if (tid) openFromEv(0, document.getElementById("agent-doing").textContent || "Task", { type: "open_task", id: Number(tid) });
-    else openFromEv(0, "What’s happening", { type: "open_agent" });
-  });
   document.getElementById("status-open").addEventListener("click", (e) => {
     e.stopPropagation();
     openFromEv(0, "The twin", { type: "open_board" });
@@ -504,9 +533,14 @@
       else if (k === "exp:codebtn") el.addEventListener("click", () => { const code = nodes.get(`p${base}:exp:code`); if (code) code.hidden = !code.hidden; });
       else if (k === "fd:src") el.addEventListener("click", () => openFromEv(base + 1, el.dataset.title || el.dataset.name, { type: "open_source", name: el.dataset.name }));
       else if (/^task:\d+$/.test(k)) el.addEventListener("click", () => openFromEv(base + 1, el.dataset.title || "Task", { type: "open_task", id: Number(k.slice(5)) }));
-      else if (k === "ta:work") el.addEventListener("click", () => send({ type: "user_message", text: `Work on “${el.dataset.text}” now — take the next concrete step and show me the result.` }));
+      // a step row opens the step's own page; a result card opens the thing itself
+      else if (/^(?:ta|ag):act\d+$/.test(k) || /^ta:res\d+$/.test(k)) el.addEventListener("click", () => { if (el.dataset.ev) openFromEv(base + 1, el.dataset.title || "", JSON.parse(el.dataset.ev)); });
+      // on a step's page: the produced thing, and the task the step served
+      else if (k === "sp:open") el.addEventListener("click", () => { if (el.dataset.ev) openFromEv(base + 1, el.dataset.title || "", JSON.parse(el.dataset.ev)); });
+      else if (k === "sp:task") el.addEventListener("click", () => openFromEv(base + 1, "Task", { type: "open_task", id: Number(el.dataset.id) }));
+      else if (k === "ta:work") el.addEventListener("click", () => send({ type: "user_message", text: `Start working on “${el.dataset.text}” now: take the next concrete step and show me the result.` }));
       else if (k === "ta:done") el.addEventListener("click", () => {
-        send({ type: "set_task", id: Number(el.dataset.id), status: "done" });
+        send({ type: "set_task", id: Number(el.dataset.id), status: el.dataset.status || "done" });
         openFromEv(base, panels[base] ? panels[base].title : "Task", { type: "open_task", id: Number(el.dataset.id) });
       });
       else if (k === "fd:investigate") el.addEventListener("click", () => send({ type: "user_message", text: `Investigate this finding and show me the evidence: “${el.dataset.text}”` }));

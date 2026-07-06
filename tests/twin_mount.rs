@@ -232,7 +232,7 @@ fn hierarchy_rolls_up_links_and_agent_can_inspect() {
     // agent inspect tool computes stats — the result lands in its activity log
     g.twin_agent_tool(r#"{"tool":"inspect","args":{"source":"timeseries"}}"#);
     let log = g.twin_from(0);
-    assert!(log.contains("inspected") && log.contains("timeseries"), "inspect did not run");
+    assert!(log.contains("checked") && log.contains("timeseries"), "inspect did not run");
     assert!(log.contains("agent-act"), "inspect result not on the now-strip");
 }
 
@@ -312,8 +312,8 @@ fn agent_records_findings_on_the_board() {
     assert!(muts.contains("Findings — 1"), "tile title has no count");
     assert!(muts.contains("fnd:1") && muts.contains("sev-warn"), "finding card missing: {muts}");
     assert!(muts.contains("no vibration sensor"), "finding text missing");
-    assert!(muts.contains("Data issue"), "finding not surfaced as a chat card");
-    assert!(muts.contains("open_finding"), "chat card does not open the finding itself");
+    // the chat is the user's space: filing a finding posts NOTHING there
+    assert!(!muts.contains("feed-item card"), "finding leaked into the chat: {muts}");
     // filing the same finding twice is a no-op
     g.twin_agent_tool(r#"{"tool":"finding","args":{"severity":"warn","text":"3 turbines have no vibration sensor"}}"#);
     assert!(!g.twin_from(0).contains("fnd:2"), "duplicate finding filed twice");
@@ -346,13 +346,14 @@ fn agent_authors_a_lens_with_lineage() {
     assert!(muts.contains("above 70 degrees"), "description missing from the tile");
     assert!(muts.contains("a lens over turbines"), "lineage-in-words missing from the tile");
     assert!(!muts.contains("return rows.filter"), "code leaked onto the board tile");
-    // the derived rows render inline as a view card; the filtered-out row does not
-    assert!(muts.contains("WT-02") && muts.contains("WT-03"), "derived rows missing from inline view");
-    assert!(!muts.contains("WT-01"), "lens filter not applied");
-    // deep inspection: expanding the lens shows the derivation chain AND the code
+    // authoring is QUIET: nothing lands in the chat unless the agent shows it
+    assert!(!muts.contains("feed-item view"), "lens auto-posted a card into the chat");
+    // deep inspection: expanding the lens shows the rows, the chain AND the code
     g.twin_event(r#"{"type":"open_source","name":"lens:hot-gearboxes"}"#);
     let deep = g.twin_from(0);
     assert!(deep.contains("exp:tbl"), "lens not browsable as a table");
+    assert!(deep.contains("WT-02") && deep.contains("WT-03"), "derived rows missing from the deep view");
+    assert!(!deep.contains("WT-01"), "lens filter not applied");
     assert!(deep.contains("chain-part"), "no derivation breadcrumb in the expanded view");
     assert!(deep.contains("code-toggle"), "no code toggle in the expanded view");
     assert!(deep.contains("return rows.filter"), "code not present behind the toggle");
@@ -471,17 +472,21 @@ fn agent_page_shows_agenda_and_activity_tidily() {
     g.twin_agent_tool(r#"{"tool":"work","args":{"task":"profile","text":"profiling turbines: ranges look sane"}}"#);
     g.twin_event(r#"{"type":"open_agent","panel":0}"#);
     let d = g.twin_from(0);
-    assert!(d.contains("the plan"), "no plan section: {d}");
+    assert!(d.contains("Plan"), "no plan section: {d}");
     assert!(d.contains("task:1") && d.contains("task:2"), "task rows are not clickable things");
     assert!(d.contains(r#""text":"now""#), "active task not labelled now");
-    assert!(d.contains("recently") && d.contains("ranges look sane"), "activity log missing");
+    assert!(d.contains("Recent steps") && d.contains("ranges look sane"), "activity log missing");
 
-    // a task is a THING: it opens to its own page with status, work-so-far, actions
+    // a task is a THING: it opens to its own page with status, steps, actions
     g.twin_event(r#"{"type":"open_task","id":1,"panel":1}"#);
     let t = g.twin_from(0);
     assert!(t.contains("task-active") && t.contains("in progress"), "no status chip: {t}");
-    assert!(t.contains("work so far") && t.contains("ranges look sane"), "task-scoped activity missing");
-    assert!(t.contains("ta:work") && t.contains("ta:done"), "task actions missing");
+    assert!(t.contains("Steps") && t.contains("ranges look sane"), "task-scoped steps missing");
+    // a RUNNING task never offers "start it" — only its way to done; and the page
+    // says what the agent is doing right now
+    assert!(!t.contains("ta:work"), "running task still offers a start button: {t}");
+    assert!(t.contains("ta:done") && t.contains("Mark done"), "no done action: {t}");
+    assert!(t.contains("ta:now") && t.contains("ranges look sane"), "no live now-line: {t}");
     // marking done is an event; the fold updates everywhere
     g.twin_event(r#"{"type":"set_task","id":1,"status":"done"}"#);
     assert!(g.twin_perceive().contains("\"agendaDone\":1"), "done not folded");
@@ -537,4 +542,152 @@ fn watch_derives_blind_spots_and_hotspots() {
     assert!(w.contains("Blind spots"), "no blind-spots section");
     assert!(w.contains("iss:2:1:0") && w.contains("Pump"), "Pump (events, no sensors) not flagged as blind spot");
     assert!(w.contains("Maintenance hotspots"), "no hotspots section");
+}
+
+#[test]
+fn task_page_folds_retries_into_a_story() {
+    let path = write_temp_csv();
+    let mut g = JsGraph::new_twin();
+    g.twin_read_source("turbines", &path, "mounted");
+    g.twin_agent_tool(r#"{"tool":"plan","args":{"items":["Find hot equipment"]}}"#);
+    g.twin_agent_tool(r#"{"tool":"work","args":{"task":"hot","text":"scanning the registry for hot gearboxes"}}"#);
+    // two failed attempts (bad code, then a bad source), then the one that works
+    g.twin_agent_tool(r#"{"tool":"make_lens","args":{"name":"Hot equipment","source":"turbines","code":"return rows.filter(r => r.nope.toLowerCase())"}}"#);
+    g.twin_agent_tool(r#"{"tool":"make_lens","args":{"name":"Hot equipment","source":"turbines","code":"return rows.filter(r =>"}}"#);
+    g.twin_agent_tool(r#"{"tool":"make_lens","args":{"name":"Hot equipment","description":"Gearboxes above 70.","source":"turbines","code":"return rows.filter(r => Number(r.gearbox_temp) > 70)"}}"#);
+
+    g.twin_event(r#"{"type":"open_task","id":1,"panel":0}"#);
+    let t = g.twin_from(0);
+    // the retries are folded INTO the success — one created row, no error rows left
+    assert!(t.contains(r#""text":"created""#), "no created label: {t}");
+    assert!(!t.contains(r#""text":"error""#), "resolved failures still shown on the task page: {t}");
+    // the produced lens surfaces as a Result card up top, opening the lens itself
+    assert!(t.contains("Results") && t.contains("ta:res0"), "no results section: {t}");
+    assert!(t.contains("open_source") && t.contains("lens:hot-equipment"), "result is not openable: {t}");
+    // each step row opens the step's own page, carrying the retry count with it
+    assert!(t.contains("open_step") && t.contains(r#"\"n\":2"#), "step rows lost the retry story: {t}");
+    // the work note reads as a step too
+    assert!(t.contains("scanning the registry"), "work note missing: {t}");
+
+    // the created step's page tells the whole story: facts, retries, and the way in
+    g.twin_event(r#"{"type":"open_step","seq":4,"n":2,"panel":1}"#);
+    let sp = g.twin_from(0);
+    assert!(sp.contains("succeeded after 2 failed attempts"), "step page lost the retry story: {sp}");
+    assert!(sp.contains("2 rows from turbines"), "step page has no facts: {sp}");
+    assert!(sp.contains("part of: Find hot equipment"), "step page not linked to its task: {sp}");
+    assert!(sp.contains("Open the view"), "step page cannot open the produced lens: {sp}");
+}
+
+#[test]
+fn unresolved_failures_collapse_with_an_attempt_count() {
+    let path = write_temp_csv();
+    let mut g = JsGraph::new_twin();
+    g.twin_read_source("turbines", &path, "mounted");
+    g.twin_agent_tool(r#"{"tool":"plan","args":{"items":["Chase a broken idea"]}}"#);
+    g.twin_agent_tool(r#"{"tool":"work","args":{"task":"broken","text":"trying a derivation"}}"#);
+    g.twin_agent_tool(r#"{"tool":"make_lens","args":{"name":"Doomed","source":"turbines","code":"return rows.map(r => r.x.y)"}}"#);
+    g.twin_agent_tool(r#"{"tool":"make_lens","args":{"name":"Doomed","source":"turbines","code":"return rows.map(r => r.x.z)"}}"#);
+    g.twin_event(r#"{"type":"open_task","id":1,"panel":0}"#);
+    let t = g.twin_from(0);
+    assert!(t.contains("(2 attempts)"), "failures not collapsed with a count: {t}");
+    assert!(t.contains("t-error"), "failed row not toned as an error: {t}");
+}
+
+#[test]
+fn inspect_reads_like_a_person_wrote_it() {
+    let mut g = JsGraph::new_twin();
+    let e = std::env::temp_dir().join(format!("insp_h_{}.csv", std::process::id()));
+    // id-ish columns, epoch-ms timestamps, an always-empty column, a constant
+    std::fs::write(&e, "id,assetIds,startTime,count,description\n\
+        1,87732307364972,1552521600000,1,\n\
+        2,87732307364973,1698883200000,1,\n\
+        3,87732307364974,1600000000000,1,\n").unwrap();
+    g.twin_read_source("events", e.to_str().unwrap(), "mounted");
+    g.twin_agent_tool(r#"{"tool":"inspect","args":{"source":"events"}}"#);
+    let log = g.twin_from(0);
+    // identifiers are never ranged; timestamps read as dates; constants are skipped
+    assert!(!log.contains("assetIds 8773"), "id column ranged as a measurement: {log}");
+    assert!(log.contains("startTime 2019-03-14 → 2023-11-02"), "timestamps not read as dates: {log}");
+    assert!(!log.contains("count 1–1"), "constant column shown as a range: {log}");
+    assert!(log.contains("description always empty"), "empty column not summarized: {log}");
+}
+
+#[test]
+fn agent_lens_references_resolve_by_title() {
+    let path = write_temp_csv();
+    let mut g = JsGraph::new_twin();
+    g.twin_read_source("turbines", &path, "mounted");
+    g.twin_agent_tool(r#"{"tool":"make_lens","args":{"name":"Hot gearboxes","description":"Above 70.","source":"turbines","code":"return rows.filter(r => Number(r.gearbox_temp) > 70)"}}"#);
+    // the agent refers to its lens by TITLE, not slug — meet it halfway
+    g.twin_agent_tool(r#"{"tool":"make_lens","args":{"name":"Critical gearboxes","description":"Above 80.","source":"lens:Hot Gearboxes","code":"return rows.filter(r => Number(r.gearbox_temp) > 80)"}}"#);
+    let muts = g.twin_from(0);
+    assert!(muts.contains("ln:critical-gearboxes"), "title-cased lens source did not resolve: {muts}");
+}
+
+#[test]
+fn done_tasks_offer_reopen_and_open_tasks_offer_work() {
+    let mut g = JsGraph::new_twin();
+    g.twin_agent_tool(r#"{"tool":"plan","args":{"items":["Profile the fleet"]}}"#);
+    g.twin_event(r#"{"type":"set_task","id":1,"status":"done"}"#);
+    g.twin_event(r#"{"type":"open_task","id":1,"panel":0}"#);
+    let t = g.twin_from(0);
+    assert!(t.contains(r#""text":"Reopen""#), "done task has no reopen action: {t}");
+    assert!(t.contains(r#""value":"open""#), "reopen does not carry the open status: {t}");
+    // reopening folds the status back and the page offers work again
+    g.twin_event(r#"{"type":"set_task","id":1,"status":"open"}"#);
+    g.twin_event(r#"{"type":"open_task","id":1,"panel":0}"#);
+    let r = g.twin_from(0);
+    assert!(r.contains("Start now"), "reopened task has no start action: {r}");
+}
+
+#[test]
+fn lens_code_joins_other_sources_via_table() {
+    let mut g = JsGraph::new_twin();
+    let a = std::env::temp_dir().join(format!("join_assets_{}.csv", std::process::id()));
+    std::fs::write(&a, "id,name\n1,Compressor\n2,Pump\n").unwrap();
+    let e = std::env::temp_dir().join(format!("join_events_{}.csv", std::process::id()));
+    std::fs::write(&e, "id,assetIds,type\n10,1,WO\n11,1,WO\n").unwrap();
+    g.twin_read_source("assets", a.to_str().unwrap(), "mounted");
+    g.twin_read_source("events", e.to_str().unwrap(), "mounted");
+    // a cross-reference: assets that have events — impossible without table()
+    g.twin_agent_tool(r#"{"tool":"make_lens","args":{"name":"Assets with work orders","description":"Assets that appear in maintenance events.","source":"assets","code":"const ev = table('events'); return rows.filter(r => ev.some(x => String(x.assetIds) === String(r.id)))"}}"#);
+    let muts = g.twin_from(0);
+    assert!(muts.contains("ln:assets-with-work-orders"), "join lens not built: {muts}");
+    assert!(muts.contains("1 rows"), "join row count wrong: {muts}");
+    let seen = g.twin_perceive();
+    assert!(seen.contains("Compressor"), "joined rows wrong: {seen}");
+    // an unknown table fails with a pointed message, not a bare ReferenceError
+    g.twin_agent_tool(r#"{"tool":"make_lens","args":{"name":"Broken join","source":"assets","code":"return table('nope')"}}"#);
+    assert!(g.twin_from(0).contains("no such source"), "unknown table not explained");
+}
+
+#[test]
+fn an_open_task_page_follows_the_work_live() {
+    let mut g = JsGraph::new_twin();
+    g.twin_agent_tool(r#"{"tool":"plan","args":{"items":["Profile the fleet"]}}"#);
+    g.twin_agent_tool(r#"{"tool":"work","args":{"task":"fleet","text":"starting with the registry"}}"#);
+    g.twin_event(r#"{"type":"open_task","id":1,"panel":0}"#);
+    let before = g.twin_total();
+    // the agent keeps working while the page is open — the now-line follows
+    g.twin_agent_tool(r#"{"tool":"work","args":{"text":"now checking sensor coverage"}}"#);
+    let tail = g.twin_from(before);
+    assert!(tail.contains(r#""key":"p0:ta:now:t""#) && tail.contains("now checking sensor coverage"),
+        "open task page did not follow the work: {tail}");
+    // …and marking it done flips the chip live, and hides the now-line
+    g.twin_event(r#"{"type":"set_task","id":1,"status":"done"}"#);
+    let t2 = g.twin_from(before);
+    assert!(t2.contains(r#""key":"p0:ta:st""#) && t2.contains(r#""text":"done""#), "chip did not follow the status: {t2}");
+    assert!(t2.contains(r#""key":"p0:ta:now","name":"hidden""#), "now-line not hidden when done: {t2}");
+}
+
+#[test]
+fn pausing_is_captured_and_confirmed_quietly() {
+    let mut g = JsGraph::new_twin();
+    g.twin_event(r#"{"type":"pause"}"#);
+    let muts = g.twin_from(0);
+    assert!(muts.contains("Twin paused"), "no confirmation line for pause: {muts}");
+    g.twin_event(r#"{"type":"resume"}"#);
+    assert!(g.twin_from(0).contains("Twin resumed"), "no confirmation line for resume");
+    // the raw events are in the input stream, so the agent perceives what happened
+    assert!(g.twin_perceive().contains("paused the twin"), "pause not perceived as a user action");
 }

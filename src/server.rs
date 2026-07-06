@@ -10,7 +10,9 @@
 
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 use std::thread;
 
 use crate::agent;
@@ -84,10 +86,15 @@ fn apply_event(g: &mut JsGraph, stamped_json: &str) {
 pub fn serve(addr: &str) -> std::io::Result<()> {
     let (tx, rx) = mpsc::channel::<Cmd>();
 
+    // The twin's run switch: while paused, the agent does NO background work (it
+    // still answers when the user writes).  Flipped by pause/resume UI events —
+    // which are journaled like all input, so the state survives restarts.
+    let paused = Arc::new(AtomicBool::new(false));
+
     // The agent lives on its own thread (model calls block for seconds and must not
     // stall the graph). It returns a wake channel the graph pokes on user input.
-    let wake = agent::spawn(tx.clone());
-    thread::spawn(move || graph_loop(rx, wake));
+    let wake = agent::spawn(tx.clone(), paused.clone());
+    thread::spawn(move || graph_loop(rx, wake, paused));
 
     let listener = TcpListener::bind(addr)?;
     println!("twin serve — open http://{addr}");
@@ -107,8 +114,24 @@ pub fn serve(addr: &str) -> std::io::Result<()> {
     Ok(())
 }
 
+/// If this raw UI event is the run switch, flip the shared flag.  Called on the
+/// live path AND the boot replay, so a paused twin stays paused across restarts.
+fn note_pause(paused: &AtomicBool, ev_json: &str) {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(ev_json) {
+        match v["type"].as_str() {
+            Some("pause") => paused.store(true, Ordering::Relaxed),
+            Some("resume") => paused.store(false, Ordering::Relaxed),
+            _ => {}
+        }
+    }
+}
+
+fn twin_state_msg(paused: &AtomicBool) -> String {
+    format!("{{\"type\":\"twin\",\"paused\":{}}}", paused.load(Ordering::Relaxed))
+}
+
 /// Owns the V8 graph; serializes all edits. Broadcasts new mutation slices + status.
-fn graph_loop(rx: Receiver<Cmd>, wake: Sender<agent::Wake>) {
+fn graph_loop(rx: Receiver<Cmd>, wake: Sender<agent::Wake>, paused: Arc<AtomicBool>) {
     let mut g = JsGraph::new_twin();
 
     // Core skills-loader (§4.1, §11.13): seed the twin's skill registry from the static
@@ -162,7 +185,11 @@ fn graph_loop(rx: Receiver<Cmd>, wake: Sender<agent::Wake>) {
         for line in text.lines() {
             let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
             match (v["k"].as_str(), v["p"].as_str()) {
-                (Some("ev"), Some(p)) => { apply_event(&mut g, p); replayed += 1; }
+                (Some("ev"), Some(p)) => {
+                    apply_event(&mut g, p);
+                    note_pause(&paused, p);
+                    replayed += 1;
+                }
                 (Some("tool"), Some(p)) => { dispatch_tool(&mut g, p); replayed += 1; }
                 _ => {}
             }
@@ -186,7 +213,7 @@ fn graph_loop(rx: Receiver<Cmd>, wake: Sender<agent::Wake>) {
             Cmd::Connect(tx) => {
                 // full snapshot [0..now); replaying it rebuilds the current DOM exactly.
                 let snapshot = wrap(&g.twin_from(0));
-                if tx.send(snapshot).is_ok() {
+                if tx.send(snapshot).is_ok() && tx.send(twin_state_msg(&paused)).is_ok() {
                     clients.push(tx);
                 }
                 // the user just showed up — the agent should be seen working, not
@@ -208,6 +235,15 @@ fn graph_loop(rx: Receiver<Cmd>, wake: Sender<agent::Wake>) {
                     let stamped = v.to_string();
                     apply_event(&mut g, &stamped);
                     journal_append(&mut journal, "ev", &stamped);
+                    if etype == "pause" || etype == "resume" {
+                        note_pause(&paused, &stamped);
+                        let msg = twin_state_msg(&paused);
+                        clients.retain(|c| c.send(msg.clone()).is_ok());
+                        // a resumed twin gets back to work immediately, not after backoff
+                        if etype == "resume" {
+                            wake.send(agent::Wake::Presence).ok();
+                        }
+                    }
                 }
                 broadcast_new(&mut g, &mut cursor, &mut clients);
                 // wake the agent when the user addressed it (typed or answered a card);

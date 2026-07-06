@@ -16,7 +16,9 @@
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -71,11 +73,11 @@ You act by emitting exactly ONE JSON object per turn — no prose outside it, no
 - {"tool":"record_profile","args":{"field":"...","value":"..."}}  save a durable fact about the user (role, goal, industry, data) the moment you learn it — including goals you INFER from their raw actions.
 - {"tool":"read_source","args":{"path":"/absolute/path/to/file.csv"}}  mount a local file (CSV/JSON/JSONL) — federates it (no copy); it then appears in your perception under "sources".
 - {"tool":"inspect","args":{"source":"<name>"}}  profile a mounted source: ranges, empties, duplicates. The result lands in your activity log for the next turn.
-- {"tool":"plan","args":{"items":["...","..."]}}  add items to your agenda — your own to-do list, visible to the user.
+- {"tool":"plan","args":{"items":[{"title":"...","description":"..."}]}}  add items to your agenda — your own to-do list, visible to the user. Every item needs a short TITLE plus a one-sentence DESCRIPTION of what you intend and why (plain strings are accepted but worse).
 - {"tool":"work","args":{"task":"<id or text>","text":"what you're doing"}}  log progress; marks that agenda item active.
 - {"tool":"done","args":{"task":"<id or text>"}}  mark an agenda item done.
-- {"tool":"finding","args":{"severity":"info"|"warn"|"critical","text":"...","source":"<name>"}}  record a data issue or insight you discovered — it lands in the chat and on the Findings board, and the user gets Investigate / Propose-a-fix buttons on it. Write it so a human can act: WHAT is wrong, WHERE, and why it matters. Never re-file one already in "findings".
-- {"tool":"make_lens","args":{"name":"Gearboxes running hot","description":"one sentence: what this shows and why it matters","source":"<name>","code":"return rows.filter(r => ...)"}}  AUTHOR a new lens: pure JavaScript, gets `rows` (array of plain objects) from the source, returns an array of rows. It becomes a live derived source with full lineage, shown as a tile on the twin board. NAMING MATTERS: "name" must be a short human title a plant engineer would say (e.g. "Unique asset types", "Sensors without equipment") — NEVER include the word "lens", and always give a real one-sentence description. Lenses COMPOSE: "source" can be another lens (source:"lens:<name>"), and the board shows the full derivation chain. After authoring a lens, EXPLAIN it: follow with a short `say` about what it shows and why you built it — never leave a bare card in the chat.
+- {"tool":"finding","args":{"severity":"info"|"warn"|"critical","text":"...","source":"<name>"}}  record a data issue or insight you discovered — it lands on the Findings board and in your work log, NOT in the chat. Write it so a human can act: WHAT is wrong, WHERE, and why it matters. If it is warn or critical and the user should know NOW, follow with a short `say` that TELLS them what you found and why it matters — filing alone tells them nothing. Never re-file one already in "findings".
+- {"tool":"make_lens","args":{"name":"Gearboxes running hot","description":"one sentence: what this shows and why it matters","source":"<name>","code":"return rows.filter(r => ...)"}}  AUTHOR a new lens: pure JavaScript, gets `rows` (array of plain objects) from the source, returns an array of rows. To CROSS-REFERENCE another source, call `table("<name>")` — it returns that source's rows (e.g. `const ev = table("events"); return rows.filter(r => ev.some(e => String(e.assetIds).includes(String(r.id))))`). Other sources exist ONLY through table(); bare names like `events` or `timeseries` are NOT defined. The lens becomes a live derived source with full lineage, shown as a tile on the twin board. NAMING MATTERS: "name" must be a short human title a plant engineer would say (e.g. "Unique asset types", "Sensors without equipment") — NEVER include the word "lens", and always give a real one-sentence description. Lenses COMPOSE: "source" can be another lens (source:"lens:<name>"), and the board shows the full derivation chain. A new lens lands on the board QUIETLY — mention it in the chat (say/show) only when it is genuinely interesting to the user, not for every derivation you try.
 - {"tool":"describe","args":{"source":"<name or lens:name>","title":"...","description":"..."}}  give any source or lens a better human title and description. Every tile on the board deserves both.
 - {"tool":"idle","args":{}}  background only: nothing worth doing right now.
 
@@ -83,6 +85,8 @@ You perceive the twin as JSON each turn: "profile", "sources" (schema + sample r
 
 Rules:
 - Output ONE valid JSON object only. Nothing before or after it.
+- THE CHAT IS THE USER'S SPACE. Nothing appears there unless you deliberately say/ask/show. Your work (findings, lenses, inspections) lives on the board and in your work log — the user browses it when they want. Speak only when you have something worth their attention.
+- THE USER COMES FIRST. When the user has just spoken, your reply must address THEM — answer the question, do what they asked. Never respond with unrelated background updates; park your own work and pick it up in background turns.
 - On the very first turn (empty feed), introduce yourself in one or two sentences, say you'll be driving and that everything you do is branched and reversible, and invite them to tell you what they work on. If sources are already mounted, take initiative: show something useful from them and point out what you notice.
 - When the user asks to see data ("show me…", "list…", "a table of…"), you MUST answer with a `show` call — never format rows in `say`.
 - Call it "the twin" — the model of their operation, never a twin "of you".
@@ -94,7 +98,7 @@ Rules:
 - You both act AND ask — take initiative on safe, reversible work, and ask the user pointed questions to steer it. Don't ask permission for reversible steps; do ask for the judgment and domain knowledge only they have. End each foreground turn by say-ing what you did/showing it, or by ask-ing."#;
 
 /// Appended to background turns: the agent's own work time, and how to spend it.
-const BACKGROUND_BRIEF: &str = "BACKGROUND TURN — the user has NOT spoken; this is your own work time on your own compute. Do real proactive work now: keep your agenda current (plan / work / done); inspect sources you haven't profiled (check activity for what you already did); record data issues or insights as findings; author a lens with make_lens when you see a useful derivation; infer the user's goals from userActions and record_profile them. NARRATE WHAT MATTERS: if this turn produced something the user should understand — a lens you built, an issue you found, a pattern you noticed — END the turn with ONE short `say` (1–2 sentences, plain language) explaining WHAT you did and WHY it matters, so the cards in the chat never appear without context. If the work was routine (just profiling, planning), end quietly without `say`. If ONE pointed question would unblock better work, use `ask` — it waits for the user as a card. If there is truly nothing left worth doing, emit {\"tool\":\"idle\",\"args\":{}}.";
+const BACKGROUND_BRIEF: &str = "BACKGROUND TURN — the user has NOT spoken; this is your own work time on your own compute. Do real proactive work now: keep your agenda current (plan / work / done); inspect sources you haven't profiled (check activity for what you already did); record data issues or insights as findings; author a lens with make_lens when you see a useful derivation; infer the user's goals from userActions and record_profile them. STAY OUT OF THE CHAT: background work ends QUIETLY by default — the board and your work log already show it. Use ONE short `say` only when something genuinely demands the user's attention right now (a critical issue, a surprising pattern that changes the picture). If ONE pointed question would unblock better work, use `ask` — it waits for the user as a card. If there is truly nothing left worth doing, emit {\"tool\":\"idle\",\"args\":{}}.";
 
 /// Why the agent is being woken.
 pub enum Wake {
@@ -106,9 +110,11 @@ pub enum Wake {
 }
 
 /// Spawn the agent thread. Returns a wake channel the graph pokes on user input.
-pub fn spawn(tx: Sender<Cmd>) -> Sender<Wake> {
+/// `paused` is the twin's run switch: while set, background turns are skipped
+/// entirely — the agent only answers when the user addresses it.
+pub fn spawn(tx: Sender<Cmd>, paused: Arc<AtomicBool>) -> Sender<Wake> {
     let (wake_tx, wake_rx) = mpsc::channel::<Wake>();
-    thread::spawn(move || agent_loop(tx, wake_rx));
+    thread::spawn(move || agent_loop(tx, wake_rx, paused));
     wake_tx
 }
 
@@ -122,8 +128,9 @@ fn drain(wake_rx: &Receiver<Wake>, mut w: Wake) -> Wake {
     w
 }
 
-fn agent_loop(tx: Sender<Cmd>, wake_rx: Receiver<Wake>) {
+fn agent_loop(tx: Sender<Cmd>, wake_rx: Receiver<Wake>, paused: Arc<AtomicBool>) {
     let model = std::env::var("TWIN_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+    let is_paused = || paused.load(Ordering::Relaxed);
     // The agent itself opens the conversation — a real model turn (with the thinking
     // indicator), not a canned string, so it's clearly the agent talking.  But a
     // REMEMBERED twin (journal replayed into a non-empty feed) is a conversation in
@@ -132,7 +139,7 @@ fn agent_loop(tx: Sender<Cmd>, wake_rx: Receiver<Wake>) {
         .ok()
         .and_then(|v| v["feed"].as_array().map(|a| a.is_empty()))
         .unwrap_or(true);
-    if fresh {
+    if fresh && !is_paused() {
         run_turn(&tx, &model, Mode::Foreground, &wake_rx);
     }
     let mut idle = BG_FIRST_IDLE;
@@ -143,6 +150,11 @@ fn agent_loop(tx: Sender<Cmd>, wake_rx: Receiver<Wake>) {
                     Wake::Steer => Mode::Foreground,
                     Wake::Presence => Mode::Background,
                 };
+                // paused = no work of the agent's own; the user's words still land.
+                if mode == Mode::Background && is_paused() {
+                    idle = BG_FIRST_IDLE;
+                    continue;
+                }
                 match run_turn(&tx, &model, mode, &wake_rx) {
                     Outcome::Preempted => {
                         drain(&wake_rx, Wake::Steer);
@@ -153,8 +165,12 @@ fn agent_loop(tx: Sender<Cmd>, wake_rx: Receiver<Wake>) {
                     Outcome::Idled => idle = BG_FIRST_IDLE, // just woken — stay attentive
                 }
             }
-            // quiet — the agent's own work time
+            // quiet — the agent's own work time (unless the user paused the twin)
             Err(RecvTimeoutError::Timeout) => {
+                if is_paused() {
+                    idle = BG_MAX_IDLE; // nothing to do but wait for a wake
+                    continue;
+                }
                 match run_turn(&tx, &model, Mode::Background, &wake_rx) {
                     Outcome::Preempted => {
                         drain(&wake_rx, Wake::Steer);
@@ -188,7 +204,6 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
     let mut stuck = 0;
     let mut idle_overrides = 0;
     let mut idle_item: Option<String> = None;
-    let mut lens_notes: Vec<String> = Vec::new();
     for _ in 0..MAX_STEPS {
         if background {
             if let Ok(w) = wake.try_recv() {
@@ -281,32 +296,14 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
         }
         eprintln!("[agent{}] {name}: {}", if background { "·bg" } else { "" }, preview(&tool));
         emit(tx, &tool);
-        // remember what got built, so the turn can never leave a bare lens card
-        // in the chat with no explanation (the narration backstop below).
-        if name == "make_lens" {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&tool) {
-                let n = v["args"]["name"].as_str().unwrap_or("a new lens");
-                let d = v["args"]["description"].as_str().unwrap_or("");
-                lens_notes.push(if d.is_empty() {
-                    format!("“{n}”")
-                } else {
-                    format!("“{n}” — {}", d.trim_end_matches('.'))
-                });
-            }
-        }
         // A turn ends when the agent addresses the user.
         if name == "say" || name == "ask" {
             said = true;
             break;
         }
     }
-    // Narration backstop: if the model built lenses but didn't explain itself, say
-    // it deterministically — in the agent's OWN words (its name + description args),
-    // so cards never appear in the conversation without motivation.
-    if !said && !preempted && !lens_notes.is_empty() {
-        emit(tx, &say_json(&format!("I added {} to the twin.", lens_notes.join("; and "))));
-        said = true;
-    }
+    // No narration backstop: the chat is the user's space, and speaking is the
+    // agent's own deliberate act — quiet background work is the norm, not a bug.
     // A FOREGROUND turn must never end with NOTHING — but if it already produced
     // visible work (cards, views, lenses), a canned "what next?" line is just jank.
     if !background && !said && !acted {

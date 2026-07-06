@@ -61,30 +61,61 @@ const T = (() => {
 
   // Folds over the event streams (the panels above render them; these Maps hold the
   // same folded state for perception + tool logic — last event per key wins).
-  const agenda = new Map();    // id -> { text, status }
+  const agenda = new Map();    // id -> { text, desc, status }
   const findings = new Map();  // id -> { severity, text, source }
   const lenses = new Map();    // name -> { source, code, rowcount, ver }
-  const activityTail = [];     // recent activity notes (perception window)
+  const activityTail = [];     // recent work steps (perception window)
+  const taskSteps = new Map(); // task id -> its full step history (the task's own page)
+  const stepIndex = new Map(); // step seq -> the step (every step has its own page)
   const userActions = [];      // recent raw user actions, described (perception window)
 
   let activeTaskId = null; // which agenda item the agent is working under, if any
   G.observe(agendaSrc, (delta) => {
     for (const [row] of delta.entries()) {
       const r = row.asObject();
-      const text = r.text || (agenda.get(r.id) || {}).text || '';
-      agenda.set(r.id, { text, status: r.status });
+      const prev = agenda.get(r.id) || {};
+      const text = r.text || prev.text || '';
+      const desc = (r.description != null && r.description !== '') ? String(r.description) : (prev.desc || '');
+      agenda.set(r.id, { text, desc, status: r.status });
       if (r.status === 'active') activeTaskId = r.id;
       else if (r.id === activeTaskId) activeTaskId = null;
       agendaPanel.set(r.id, text, r.status);
+      // any open page of this task follows along: chip and now-line stay current
+      for (const [p, t] of taskPanels) {
+        if (t !== r.id) continue;
+        const word = r.status === 'active' ? 'in progress' : r.status === 'done' ? 'done' : 'planned';
+        TWIN_MUT.push({ op: 'setText', key: `p${p}:ta:st`, text: word });
+        TWIN_MUT.push({ op: 'setAttr', key: `p${p}:ta:st`, name: 'class', value: `fd-sev task-${r.status}` });
+        TWIN_MUT.push({ op: 'setAttr', key: `p${p}:ta:now`, name: 'hidden', value: r.status === 'active' ? null : 'true' });
+      }
     }
+    updateAgentNow();
   });
   G.observe(activitySrc, (delta) => {
     for (const [row] of delta.entries()) {
       const r = row.asObject();
-      activityTail.push({ text: r.text, task: r.task || 0 });
+      const e = { seq: r.seq || 0, kind: r.kind || 'note', text: r.text || '', subject: r.subject || '',
+        detail: r.detail || '', tone: r.tone || '', ev: r.ev || '', task: r.task || 0 };
+      activityTail.push(e);
       if (activityTail.length > 60) activityTail.shift();
-      activityPanel.add(r.seq, r.text);
+      // every step is addressable — it has its own page (open_step)
+      stepIndex.set(e.seq, e);
+      if (stepIndex.size > 400) stepIndex.delete(stepIndex.keys().next().value);
+      if (e.task) {
+        let arr = taskSteps.get(e.task);
+        if (!arr) { arr = []; taskSteps.set(e.task, arr); }
+        arr.push(e);
+        if (arr.length > 250) arr.shift();
+        // an open page of this task shows what's happening live
+        if (e.kind === 'note') {
+          for (const [p, t] of taskPanels) {
+            if (t === e.task) TWIN_MUT.push({ op: 'setText', key: `p${p}:ta:now:t`, text: e.text });
+          }
+        }
+      }
+      activityPanel.add(r.seq, stepLine(e));
     }
+    updateAgentNow();
   });
   G.observe(findingsSrc, (delta) => {
     for (const [row] of delta.entries()) {
@@ -227,7 +258,26 @@ const T = (() => {
   const MAX_EXPLORE_ROWS = 200;
   const panelKeys = new Map(); // panel index -> keys rendered into it
   const openPanels = new Set(); // which columns are open — twin state, in the log
+  const taskPanels = new Map(); // panel index -> task id it shows (for live updates)
+  const agentPanels = new Set(); // panels showing the What's-happening page (live now-line)
   const fmtNum = (n) => (Math.abs(n) >= 1000 || Number.isInteger(n)) ? n.toFixed(0) : Number(n.toPrecision(4)).toString();
+  // thousands separators by hand — the embedded V8 has no ICU, so no toLocaleString
+  const fmtInt = (n) => String(Math.trunc(Number(n) || 0)).replace(/\B(?=(\d{3})+$)/g, ',');
+
+  // The agent refers to sources and lenses the way a person does — by title, by
+  // slug, with or without the "lens:" prefix.  Meet it halfway instead of failing:
+  // "lens:Critical Machinery" resolves to lens:critical-machinery.
+  function resolveSourceName(n) {
+    const name = String(n || '');
+    if (sources.has(name) || sourceIds.has(name)) return name;
+    const bare = name.replace(/^lens:\s*/i, '').trim();
+    const slug = 'lens:' + bare.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    if (sources.has(slug) || sourceIds.has(slug)) return slug;
+    for (const [nm, l] of lenses) {
+      if ((l.title || '').toLowerCase() === bare.toLowerCase()) return 'lens:' + nm;
+    }
+    return name;
+  }
 
   // Emit a close marker for every open column ≥ `from` (one marker at the lowest
   // index — the client tears down that column and everything right of it).
@@ -248,6 +298,8 @@ const T = (() => {
         panelKeys.delete(pi);
       }
     }
+    for (const pi of [...taskPanels.keys()]) if (pi >= f) taskPanels.delete(pi);
+    for (const pi of [...agentPanels]) if (pi >= f) agentPanels.delete(pi);
     markClosed(f);
   }
 
@@ -260,6 +312,8 @@ const T = (() => {
         panelKeys.delete(pi);
       }
     }
+    for (const pi of [...taskPanels.keys()]) if (pi >= p) taskPanels.delete(pi);
+    for (const pi of [...agentPanels]) if (pi >= p) agentPanels.delete(pi);
     markClosed(p + 1);
     openPanels.add(p);
     const fresh = [];
@@ -417,7 +471,7 @@ const T = (() => {
   function chartMessage(label, msg, panel) {
     const V = viewer(panel, String(label || ''), null);
     V.add('div', 'exp:note', null, 0); V.set('exp:note', 'class', 'explorer-note');
-    V.text('exp:note', `${label} — ${msg}.`);
+    V.text('exp:note', `${label}: ${msg}.`);
   }
 
   // chart lens: raw datapoints (from Rust, downsampled) → an SVG line chart.
@@ -425,7 +479,7 @@ const T = (() => {
     const V = viewer(panel, String(label || id), { type: 'fetch', adapter: 'cognite-datapoints', id: String(id), label: String(label || id) });
     if (!points || !points.length) {
       V.add('div', 'exp:note', null, 0); V.set('exp:note', 'class', 'explorer-note');
-      V.text('exp:note', `${label} — no datapoints.`);
+      V.text('exp:note', `${label}: no datapoints.`);
       return;
     }
     const W = 1000, H = 360, pad = 46;
@@ -610,32 +664,50 @@ const T = (() => {
   // All pure event sourcing: each call appends an event; the observers above fold it
   // into the panels and the perception state.  Nothing is mutated in place.
   let agendaSeq = 0;
-  function addAgenda(text) {
+  function addAgenda(text, description) {
+    const t = String(text || '').trim();
+    if (!t) return;
     agendaSeq += 1;
-    G.submit(agendaSrc, ZSet.fromRows([rec({ id: agendaSeq, text: String(text), status: 'open' })]), prov('agent'));
+    G.submit(agendaSrc, ZSet.fromRows([rec({ id: agendaSeq, text: t, description: String(description || ''), status: 'open' })]), prov('agent'));
   }
   // Resolve a task by id or text fragment and append a status-change event for it.
+  // Returns the task id it hit, or null.
   function setAgenda(ref, status) {
     const q = String(ref).trim().toLowerCase();
-    if (!q) return false;
+    if (!q) return null;
     let hit = null;
     for (const [id, a] of agenda) {
       if (String(id) === q) { hit = id; break; }
       if (hit === null && a.status !== 'done' && a.text.toLowerCase().includes(q)) hit = id;
     }
-    if (hit === null) return false;
+    if (hit === null) return null;
     G.submit(agendaSrc, ZSet.fromRows([rec({ id: hit, text: agenda.get(hit).text, status })]), prov('agent'));
-    return true;
+    return hit;
   }
   let actSeq = 0;
-  // Every work note is stamped with the agenda item it happened under, so a task's
-  // page can show "the work so far" scoped to that task.
-  function logActivity(text, taskId) {
-    const t = String(text);
-    if (activityTail.length && activityTail[activityTail.length - 1].text === t) return; // no stutter
+  // Every work step is a STRUCTURED event, stamped with the agenda item it happened
+  // under — so a task's page can tell "the work so far" as a story, not a log dump.
+  //   kind    — what happened (inspected/built/failed/flagged/…) → the row's label
+  //   text    — the human line: WHAT, in words a person would say
+  //   detail  — the quiet facts line: numbers and errors live here, never in text
+  //   subject — the noun the step is about (stable across retries, for folding)
+  //   tone    — ''/'warn'/'error' → how loud the row reads
+  //   ev      — optional open-event: the row becomes a doorway to the thing itself
+  function logStep(kind, text, o) {
+    o = o || {};
+    const last = activityTail[activityTail.length - 1];
+    const detail = String(o.detail || '');
+    if (last && last.kind === kind && last.text === String(text) && last.detail === detail) return; // no stutter
     actSeq += 1;
-    G.submit(activitySrc, ZSet.fromRows([rec({ seq: actSeq, text: t, task: taskId != null ? Number(taskId) : (activeTaskId || 0) })]), prov('agent'));
+    G.submit(activitySrc, ZSet.fromRows([rec({
+      seq: actSeq, kind: String(kind), text: String(text), detail,
+      subject: String(o.subject || ''), tone: String(o.tone || ''),
+      ev: o.ev ? JSON.stringify(o.ev) : '',
+      task: o.task != null ? Number(o.task) : (activeTaskId || 0),
+    })]), prov('agent'));
   }
+  // Plain progress notes (the agent's `work` tool) — already sentences.
+  function logActivity(text, taskId) { logStep('note', text, { task: taskId }); }
   let findingSeq = 0;
   function addFinding(a) {
     const text = String(a.text || a.description || '').trim();
@@ -645,12 +717,15 @@ const T = (() => {
     const sev = ['info', 'warn', 'critical'].includes(a.severity) ? a.severity : 'info';
     const src = String(a.source || '');
     G.submit(findingsSrc, ZSet.fromRows([rec({ id: findingSeq, severity: sev, text, source: src })]), prov('agent'));
-    // findings are DONE work — they read as a card in the chat history too, and
-    // open into the FINDING itself (severity, evidence, actions), not the raw source
-    const sevTitle = sev === 'critical' ? 'Critical issue' : sev === 'warn' ? 'Data issue' : 'Noted';
-    workCard(sevTitle, text, src ? `in ${srcTitle(src)}` : '',
-      { type: 'open_finding', id: findingSeq }, `sev-${sev}`);
-    logActivity(`finding (${sev}): ${text}`);
+    // Findings land on the Findings board and in the work log — NEVER in the chat.
+    // The chat is the user's space: if a finding matters, the agent must TELL them
+    // (say), a deliberate act, not a side effect of filing.
+    logStep('flagged', text, {
+      subject: `finding:${findingSeq}`,
+      detail: src ? `in ${srcTitle(src)}` : '',
+      tone: sev === 'critical' ? 'error' : sev === 'warn' ? 'warn' : '',
+      ev: { type: 'open_finding', id: findingSeq },
+    });
   }
 
   // A finding, opened: what's wrong, where (one click to the evidence source), and
@@ -684,81 +759,256 @@ const T = (() => {
     V.text('fd:resolve', f.status === 'resolved' ? 'Resolved ✓' : 'Mark resolved');
   }
 
-  // One row shape for every work line — a small label column and the text.
-  const VERBS = [
-    [/^authored lens\s*/, 'built'], [/^inspected\s*/, 'inspected'], [/^described\s*/, 'described'],
-    [/^finding \(\w+\):\s*/, 'flagged'], [/^done:\s*/, 'finished'], [/^lens\s*/, 'lens'],
-    [/^chart\s*/, 'chart'],
-  ];
-  function workRow(V, parent, key, idx, label, text, cls, clickable) {
+  // One row shape for every work line — a small label column, the text, and an
+  // optional quiet sub-line (a task's description, a step's facts).
+  function workRow(V, parent, key, idx, label, text, cls, clickable, sub) {
     V.add('div', key, parent, idx); V.set(key, 'class', `act-row${cls ? ' ' + cls : ''}`);
     V.add('span', `${key}:v`, key, 0); V.set(`${key}:v`, 'class', 'act-verb'); V.text(`${key}:v`, label);
-    V.add('span', `${key}:t`, key, 1); V.set(`${key}:t`, 'class', 'act-text'); V.text(`${key}:t`, text);
+    V.add('div', `${key}:c`, key, 1); V.set(`${key}:c`, 'class', 'act-content');
+    V.add('div', `${key}:t`, `${key}:c`, 0); V.set(`${key}:t`, 'class', 'act-text'); V.text(`${key}:t`, text);
+    if (sub) { V.add('div', `${key}:d`, `${key}:c`, 1); V.set(`${key}:d`, 'class', 'act-detail'); V.text(`${key}:d`, sub); }
     if (clickable) V.set(key, 'data-title', text);
   }
-  function activityRows(V, parent, keyPfx, entries) {
-    const shown = new Set();
-    let ai = 0;
-    entries.forEach((e) => {
-      if (shown.has(e.text)) return;
-      shown.add(e.text);
-      let verb = '·', rest = e.text;
-      for (const [re, v] of VERBS) {
-        if (re.test(e.text)) { verb = v; rest = e.text.replace(re, ''); break; }
+
+  // ---- the work log as a STORY (task pages + the agent page) -----------------
+  // Labels are PLAIN WORDS a person scans, never system vocabulary: a row is
+  // "created · Unique asset types · 12 rows from Equipment registry", not
+  // "BUILT lens:unique-asset-types".  'described' steps are housekeeping and are
+  // kept out of user-facing lists (they stay in the log and in perception).
+  const KIND_VERB = { note: 'working', inspected: 'checked', built: 'created', flagged: 'issue',
+    failed: 'error', described: 'updated', finished: 'done', chart: 'chart' };
+  // A step as one line — the now-strip and the agent's perception both read this.
+  function stepLine(e) {
+    const verb = KIND_VERB[e.kind] || e.kind;
+    const head = e.kind === 'note' ? e.text : `${verb} ${e.text}`;
+    return e.detail ? `${head} · ${e.detail}` : head;
+  }
+  // Fold raw steps into a readable story:
+  //  · retries of the same subject collapse into ONE failed row (attempt count, last error)
+  //  · a success absorbs its own earlier failures ("worked after N failed attempts")
+  //  · re-inspections/re-descriptions of the same subject keep only the latest
+  //  · exact repeats disappear
+  function foldSteps(entries) {
+    const out = [];
+    const failAt = new Map();   // subject -> index of its merged failed row
+    const latestAt = new Map(); // "kind|subject" -> index, for latest-wins kinds
+    const seen = new Set();
+    const reindex = (m, i) => { for (const [k, v] of m) if (v > i) m.set(k, v - 1); };
+    for (const e of entries) {
+      const subj = e.subject || e.text;
+      if (e.kind === 'failed') {
+        const i = failAt.get(subj);
+        if (i != null) { const r = out[i]; r.times += 1; r.seq = e.seq; r.text = e.text; r.detail = e.detail; continue; }
+        failAt.set(subj, out.length);
+        out.push(Object.assign({}, e, { times: 1 }));
+        continue;
       }
-      workRow(V, parent, `${keyPfx}${ai}`, ai, verb, rest, '', false);
-      ai++;
-    });
-    return ai;
+      if (e.kind === 'built' && failAt.has(subj)) {
+        const i = failAt.get(subj);
+        const tries = out[i].times;
+        out.splice(i, 1);
+        failAt.delete(subj);
+        reindex(failAt, i); reindex(latestAt, i);
+        out.push(Object.assign({}, e, { tries })); // the step's page tells the retry story
+        continue;
+      }
+      if (e.kind === 'inspected' || e.kind === 'described') {
+        const lk = `${e.kind}|${subj}`;
+        const i = latestAt.get(lk);
+        if (i != null) { out[i] = Object.assign({}, e); continue; }
+        latestAt.set(lk, out.length);
+        out.push(Object.assign({}, e));
+        continue;
+      }
+      const key = `${e.kind}|${e.text}|${e.detail}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(Object.assign({}, e));
+    }
+    return out;
+  }
+  // One step in a list: ONE line — a plain-word label and what it acted on.
+  // Steps are uniform on purpose: the list answers "what did it do, in order";
+  // everything else (facts, errors, links) lives on the step's own page, one
+  // click away — every row opens it (the chevron says so).
+  function stepRow(V, parent, key, idx, e) {
+    const tone = e.tone === 'error' ? ' t-error' : e.tone === 'warn' ? ' t-warn' : '';
+    V.add('div', key, parent, idx); V.set(key, 'class', `act-row openable${tone}`);
+    V.add('span', `${key}:v`, key, 0); V.set(`${key}:v`, 'class', 'act-verb');
+    V.text(`${key}:v`, KIND_VERB[e.kind] || e.kind);
+    V.add('span', `${key}:t`, key, 1); V.set(`${key}:t`, 'class', 'act-text');
+    V.text(`${key}:t`, e.text + (e.kind === 'failed' && e.times > 1 ? ` (${e.times} attempts)` : ''));
+    V.add('span', `${key}:o`, key, 2); V.set(`${key}:o`, 'class', 'act-open'); V.text(`${key}:o`, '›');
+    V.set(key, 'data-ev', JSON.stringify({ type: 'open_step', seq: e.seq, n: e.times || e.tries || 0 }));
+    V.set(key, 'data-title', 'Step');
+  }
+  function stepRows(V, parent, keyPfx, entries) {
+    entries.forEach((e, i) => stepRow(V, parent, `${keyPfx}${i}`, i, e));
+    return entries.length;
+  }
+  // What a task's page shows: its own steps, minus housekeeping and minus a note
+  // that just restates the task's title.
+  function storyOf(tid, taskText) {
+    return foldSteps((taskSteps.get(tid) || []).filter((e) =>
+      e.kind !== 'described' && !(e.kind === 'note' && e.text.trim() === String(taskText).trim())));
   }
 
-  // What's happening — the plan and the recent work, in ONE visual language.
-  // Every task row is a clickable thing that opens the task's own page.
+  // A STEP, opened: the one place with everything about it — what kind of step,
+  // what it acted on, the facts or the error, the task it served, and a way to
+  // open the thing it produced or touched.
+  function openStep(seq, n, panel) {
+    const e = stepIndex.get(Number(seq));
+    const V = viewer(panel, 'Step', { type: 'open_step', seq: Number(seq), n: Number(n) || 0 });
+    if (!e) {
+      V.add('div', 'exp:note', null, 0); V.set('exp:note', 'class', 'explorer-note');
+      V.text('exp:note', 'This step has scrolled out of the window.');
+      return;
+    }
+    const nn = Number(n) || 0;
+    const sev = e.tone === 'error' ? 'sev-critical' : e.tone === 'warn' ? 'sev-warn' : 'sev-info';
+    let i = 0;
+    V.add('div', 'sp:k', null, i++); V.set('sp:k', 'class', `fd-sev ${sev}`);
+    V.text('sp:k', KIND_VERB[e.kind] || e.kind);
+    V.add('div', 'sp:t', null, i++); V.set('sp:t', 'class', 'task-title'); V.text('sp:t', e.text);
+    if (e.kind === 'built' && nn) {
+      V.add('div', 'sp:tries', null, i++); V.set('sp:tries', 'class', 'explorer-note');
+      V.text('sp:tries', `succeeded after ${nn} failed attempt${nn === 1 ? '' : 's'}`);
+    } else if (e.kind === 'failed' && nn > 1) {
+      V.add('div', 'sp:tries', null, i++); V.set('sp:tries', 'class', 'explorer-note');
+      V.text('sp:tries', `tried ${nn} times; the latest error:`);
+    }
+    if (e.detail) { V.add('div', 'sp:d', null, i++); V.set('sp:d', 'class', 'fd-text'); V.text('sp:d', e.detail); }
+    const task = e.task ? agenda.get(e.task) : null;
+    if (task) {
+      V.add('div', 'sp:task', null, i++); V.set('sp:task', 'class', 'fd-src');
+      V.set('sp:task', 'data-id', e.task); V.text('sp:task', `part of: ${task.text}`);
+    }
+    if (e.ev) {
+      const word = e.kind === 'built' ? 'Open the view' : e.kind === 'flagged' ? 'Open the finding'
+        : e.kind === 'inspected' ? 'Open the source' : 'Open it';
+      V.add('div', 'sp:cta', null, i++); V.set('sp:cta', 'class', 'fd-cta');
+      V.add('button', 'sp:open', 'sp:cta', 0); V.set('sp:open', 'class', 'fd-btn primary');
+      V.set('sp:open', 'data-ev', e.ev); V.set('sp:open', 'data-title', e.subject || e.text);
+      V.text('sp:open', word);
+    }
+  }
+
+  // What is the agent doing RIGHT NOW — one line for the top of the agent page,
+  // kept live by the agenda and activity folds.
+  function agentNow() {
+    let act = null;
+    for (const a of agenda.values()) if (a.status === 'active') { act = a; break; }
+    if (act) {
+      const n = [...activityTail].reverse().find((x) => x.kind === 'note' && (!activeTaskId || x.task === activeTaskId));
+      return { live: true, text: `${act.text}${n ? ' · ' + n.text : ''}` };
+    }
+    const last = activityTail[activityTail.length - 1];
+    return { live: false, text: last ? `last: ${stepLine(last)}` : 'nothing running right now' };
+  }
+  function updateAgentNow() {
+    const s = agentNow();
+    for (const p of agentPanels) {
+      TWIN_MUT.push({ op: 'setText', key: `p${p}:ag:now:t`, text: s.text });
+      TWIN_MUT.push({ op: 'setAttr', key: `p${p}:ag:now:dot`, name: 'class', value: 'now-dot' + (s.live ? ' live' : '') });
+    }
+  }
+
+  // What's happening — what it's doing NOW (live), the plan, and the recent steps.
+  // Every task row opens the task's page; every step row opens the step's page.
   function openAgentPage(panel) {
     const V = viewer(panel, 'What’s happening', { type: 'open_agent' });
-    V.add('div', 'ag:l1', null, 0); V.set('ag:l1', 'class', 'explorer-note'); V.text('ag:l1', 'the plan');
-    V.add('div', 'ag:list', null, 1); V.set('ag:list', 'class', 'agent-block');
+    agentPanels.add(V.panel);
+    const s = agentNow();
+    V.add('div', 'ag:now', null, 0); V.set('ag:now', 'class', 'task-now agent-now');
+    V.add('span', 'ag:now:dot', 'ag:now', 0); V.set('ag:now:dot', 'class', 'now-dot' + (s.live ? ' live' : ''));
+    V.add('span', 'ag:now:t', 'ag:now', 1); V.text('ag:now:t', s.text);
+    V.add('div', 'ag:l1', null, 1); V.set('ag:l1', 'class', 'ad-section'); V.text('ag:l1', 'Plan');
+    V.add('div', 'ag:list', null, 2); V.set('ag:list', 'class', 'agent-block');
     const items = [...agenda].sort((x, y) => {
-      const rank = (s) => (s === 'active' ? 0 : s === 'open' ? 1 : 2);
+      const rank = (st) => (st === 'active' ? 0 : st === 'open' ? 1 : 2);
       return rank(x[1].status) - rank(y[1].status);
     });
-    if (!items.length) { V.add('div', 'ag:none', 'ag:list', 0); V.set('ag:none', 'class', 'ad-empty'); V.text('ag:none', 'no plan yet — the agent lays out its own work here'); }
+    if (!items.length) { V.add('div', 'ag:none', 'ag:list', 0); V.set('ag:none', 'class', 'ad-empty'); V.text('ag:none', 'no plan yet: the agent lays out its own work here'); }
     let i = 0;
     for (const [id, a] of items) {
       if (a.status === 'done' && i > 8) continue;
       workRow(V, 'ag:list', `task:${id}`, i++, a.status === 'active' ? 'now' : a.status === 'done' ? 'done' : 'next',
-        a.text, a.status === 'active' ? 'is-now' : a.status === 'done' ? 'is-done' : '', true);
+        a.text, a.status === 'active' ? 'is-now' : a.status === 'done' ? 'is-done' : '', true, a.desc);
     }
-    V.add('div', 'ag:l2', null, 2); V.set('ag:l2', 'class', 'explorer-note'); V.text('ag:l2', 'recently');
-    V.add('div', 'ag:acts', null, 3); V.set('ag:acts', 'class', 'agent-block');
-    if (!activityTail.length) { V.add('div', 'ag:qn', 'ag:acts', 0); V.set('ag:qn', 'class', 'ad-empty'); V.text('ag:qn', 'quiet so far'); }
-    activityRows(V, 'ag:acts', 'ag:act', activityTail.slice().reverse());
+    V.add('div', 'ag:l2', null, 3); V.set('ag:l2', 'class', 'ad-section'); V.text('ag:l2', 'Recent steps');
+    V.add('div', 'ag:acts', null, 4); V.set('ag:acts', 'class', 'agent-block');
+    // fold first (chronological), then newest on top — this is a recency feed.
+    // Issues are not steps: they live on the Findings board and in Results.
+    const recent = foldSteps(activityTail.filter((e) => e.kind !== 'described' && e.kind !== 'flagged')).slice(-30).reverse();
+    if (!recent.length) { V.add('div', 'ag:qn', 'ag:acts', 0); V.set('ag:qn', 'class', 'ad-empty'); V.text('ag:qn', 'quiet so far'); }
+    stepRows(V, 'ag:acts', 'ag:act', recent);
   }
 
-  // A TASK, opened: its status, the work done under it so far, and what you can do —
-  // same page grammar as a finding (chip · text · list · actions).
+  // A TASK, opened — built so every element answers a question the user has:
+  //   chip      "is this running?"          (in progress / planned / done)
+  //   title     "what is it?"               (full text, once — the panel tab just says Task)
+  //   now-line  "what is it doing RIGHT NOW?" (live: updates as the agent works)
+  //   buttons   "what can I do?"            (at the top, no scrolling; match the state)
+  //   Results   "what did it produce?"      (the views and issues, clickable)
+  //   Steps     "how did it get there?"     (the story, oldest first, retries folded)
   function openTask(id, panel) {
     const tid = Number(id);
     const a = agenda.get(tid);
-    const V = viewer(panel, a ? a.text.slice(0, 48) : 'Task', { type: 'open_task', id: tid });
+    const V = viewer(panel, 'Task', { type: 'open_task', id: tid });
     if (!a) {
       V.add('div', 'exp:note', null, 0); V.set('exp:note', 'class', 'explorer-note');
       V.text('exp:note', `No task #${id}.`);
       return;
     }
+    taskPanels.set(V.panel, tid);
     const word = a.status === 'active' ? 'in progress' : a.status === 'done' ? 'done' : 'planned';
-    V.add('div', 'ta:st', null, 0); V.set('ta:st', 'class', `fd-sev task-${a.status}`); V.text('ta:st', word);
-    V.add('div', 'ta:t', null, 1); V.set('ta:t', 'class', 'fd-text'); V.text('ta:t', a.text);
-    V.add('div', 'ta:l', null, 2); V.set('ta:l', 'class', 'explorer-note'); V.text('ta:l', 'work so far');
-    V.add('div', 'ta:acts', null, 3); V.set('ta:acts', 'class', 'agent-block');
-    const steps = activityTail.filter((e) => e.task === tid);
-    if (!steps.length) { V.add('div', 'ta:none', 'ta:acts', 0); V.set('ta:none', 'class', 'ad-empty'); V.text('ta:none', 'no steps yet'); }
-    activityRows(V, 'ta:acts', 'ta:act', steps.slice().reverse());
-    V.add('div', 'ta:cta', null, 4); V.set('ta:cta', 'class', 'fd-cta');
-    V.add('button', 'ta:work', 'ta:cta', 0); V.set('ta:work', 'class', 'fd-btn primary');
-    V.set('ta:work', 'data-text', a.text); V.text('ta:work', 'Work on this now');
+    let i = 0;
+    V.add('div', 'ta:st', null, i++); V.set('ta:st', 'class', `fd-sev task-${a.status}`); V.text('ta:st', word);
+    V.add('div', 'ta:t', null, i++); V.set('ta:t', 'class', 'task-title'); V.text('ta:t', a.text);
+    if (a.desc) { V.add('div', 'ta:desc', null, i++); V.set('ta:desc', 'class', 'ad-desc'); V.text('ta:desc', a.desc); }
+    // what the agent is doing right now — kept live by the activity fold below
+    V.add('div', 'ta:now', null, i++); V.set('ta:now', 'class', 'task-now');
+    if (a.status !== 'active') V.set('ta:now', 'hidden', 'true');
+    V.add('span', 'ta:now:dot', 'ta:now', 0); V.set('ta:now:dot', 'class', 'now-dot live');
+    V.add('span', 'ta:now:t', 'ta:now', 1);
+    const latestNote = [...(taskSteps.get(tid) || [])].reverse().find((e) => e.kind === 'note');
+    V.text('ta:now:t', latestNote ? latestNote.text : 'working on it…');
+    // actions first — visible without scrolling, and matching the state:
+    // a running task doesn't offer "start it"; a done task offers its way back.
+    V.add('div', 'ta:cta', null, i++); V.set('ta:cta', 'class', 'fd-cta');
+    if (a.status === 'open') {
+      V.add('button', 'ta:work', 'ta:cta', 0); V.set('ta:work', 'class', 'fd-btn primary');
+      V.set('ta:work', 'data-text', a.text); V.text('ta:work', 'Start now');
+    }
     V.add('button', 'ta:done', 'ta:cta', 1); V.set('ta:done', 'class', 'fd-btn');
-    V.set('ta:done', 'data-id', tid); V.text('ta:done', a.status === 'done' ? 'Done ✓' : 'Mark done');
+    V.set('ta:done', 'data-id', tid);
+    V.set('ta:done', 'data-status', a.status === 'done' ? 'open' : 'done');
+    V.text('ta:done', a.status === 'done' ? 'Reopen' : 'Mark done');
+
+    const story = storyOf(tid, a.text);
+    // what came out of it: the views and issues this task produced, as openable cards
+    const results = story.filter((e) => (e.kind === 'built' || e.kind === 'flagged') && e.ev);
+    // steps are ACTIONS only — issues live in Results, not mixed into the sequence
+    const steps = story.filter((e) => e.kind !== 'flagged');
+    if (results.length) {
+      V.add('div', 'ta:rl', null, i++); V.set('ta:rl', 'class', 'ad-section');
+      V.text('ta:rl', `Results — ${results.length}`);
+      V.add('div', 'ta:res', null, i++); V.set('ta:res', 'class', 'sens-list');
+      results.forEach((e, ri) => {
+        const k = `ta:res${ri}`;
+        V.add('div', k, 'ta:res', ri);
+        V.set(k, 'class', 'sens-row' + (e.kind === 'flagged' ? ` res-issue${e.tone === 'error' ? ' crit' : ''}` : ''));
+        V.set(k, 'data-ev', e.ev); V.set(k, 'data-title', e.subject || e.text);
+        V.add('div', `${k}:n`, k, 0); V.set(`${k}:n`, 'class', 'sens-n');
+        V.text(`${k}:n`, (e.kind === 'flagged' ? 'Issue: ' : '') + e.text);
+        if (e.detail) { V.add('div', `${k}:d`, k, 1); V.set(`${k}:d`, 'class', 'sens-u'); V.text(`${k}:d`, e.detail); }
+      });
+    }
+    V.add('div', 'ta:l', null, i++); V.set('ta:l', 'class', 'ad-section');
+    V.text('ta:l', steps.length ? `Steps — ${steps.length}` : 'Steps');
+    V.add('div', 'ta:acts', null, i++); V.set('ta:acts', 'class', 'agent-block');
+    if (!steps.length) { V.add('div', 'ta:none', 'ta:acts', 0); V.set('ta:none', 'class', 'ad-empty'); V.text('ta:none', 'nothing yet'); }
+    stepRows(V, 'ta:acts', 'ta:act', steps);
   }
 
   // The user re-prioritized or closed a task directly — an event, folded everywhere.
@@ -769,7 +1019,7 @@ const T = (() => {
     if (!a || a.status === s || !['open', 'active', 'done'].includes(s)) return;
     G.submit(agendaSrc, ZSet.fromRows([rec({ id: tid, text: a.text, status: s })]),
       { author: 'user', origin: 'derived', note: 'set_task' });
-    if (s === 'done') logActivity(`done: ${a.text}`, tid);
+    if (s === 'done') logStep('finished', a.text, { task: tid });
   }
 
   // Resolving a finding is an event like everything else; the folds dim it on the
@@ -779,7 +1029,7 @@ const T = (() => {
     if (!f || f.status === 'resolved') return;
     G.submit(findingsSrc, ZSet.fromRows([rec({ id: Number(id), severity: f.severity, text: f.text, source: f.source, status: 'resolved' })]),
       { author: 'user', origin: 'derived', note: 'resolved' });
-    logActivity(`finding resolved: ${f.text}`);
+    logStep('finished', `resolved: ${f.text}`, { subject: `finding:${id}`, ev: { type: 'open_finding', id: Number(id) } });
   }
 
   // The agent AUTHORS a lens (§4.1: lenses are data): pure JavaScript over a source's
@@ -788,26 +1038,41 @@ const T = (() => {
   // becomes a derived source `lens:<name>` (browsable/showable like any source) whose
   // full lineage — source, code, author — is recorded and shown on its card.
   function makeLens(a) {
-    const srcName = String(a.source || '');
+    const srcName = resolveSourceName(a.source);
     // Names must read like a human named them.  Strip any "lens" the model prefixed
-    // (the tile IS a lens — saying so is noise), slug for the stable id, and titleize
-    // for display unless the agent gave an explicit title.
+    // (the tile IS a lens — saying so is noise), slug for the stable id, and keep the
+    // agent's own wording (punctuation and all) as the display title.
     const cleaned = String(a.name || '').replace(/^(the\s+)?lens[\s:_-]*/i, '').trim();
     const name = cleaned.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'unnamed';
-    const words = name.replace(/-/g, ' ');
-    const title = String(a.title || '').trim() || (words.charAt(0).toUpperCase() + words.slice(1));
+    const title = String(a.title || '').trim() || cleaned
+      || (name.charAt(0).toUpperCase() + name.slice(1).replace(/-/g, ' '));
     const description = String(a.description || '').trim();
+    // failures fold by the lens's stable slug, so retries collapse into one row and
+    // the eventual success absorbs them ("worked after N failed attempts").
+    const step = (kind, o) => logStep(kind, title, Object.assign({ subject: 'lens:' + name }, o));
     const id = sourceIds.get(srcName);
-    if (id === undefined) { logActivity(`lens “${title}”: no source “${srcName}” — mount it first`); return; }
+    if (id === undefined) {
+      step('failed', { tone: 'error', detail: `no source named ${String(a.source || '')}; mount or build it first` });
+      return;
+    }
     const code = String(a.code || '');
+    // Lens code gets `rows` plus `table(name)` — read-only access to any other
+    // source's rows, so cross-references and joins are one call instead of an
+    // impossible reach for an undefined global.  Still pure: no IO exists here.
+    const table = (n) => {
+      const nm = resolveSourceName(n);
+      const sid = sourceIds.get(nm);
+      if (sid === undefined) throw new Error(`table("${n}"): no such source; mount or build it first`);
+      return G.stateOf(sid).support().map((r) => r.asObject());
+    };
     let out;
-    try { out = new Function('rows', code)(G.stateOf(id).support().map((r) => r.asObject())); }
-    catch (err) { logActivity(`lens “${title}” failed: ${err.message}`); return; }
-    if (!Array.isArray(out)) { logActivity(`lens “${title}”: code must return an array of rows`); return; }
+    try { out = new Function('rows', 'table', code)(G.stateOf(id).support().map((r) => r.asObject()), table); }
+    catch (err) { step('failed', { tone: 'error', detail: `${err.message}; fix the code and re-author` }); return; }
+    if (!Array.isArray(out)) { step('failed', { tone: 'error', detail: 'the code must return an array of rows' }); return; }
     if (!out.length) {
       // an empty lens is clutter, not insight — bounce it back to the agent instead
       // of landing a "0 rows" card in the chat and a dead tile on the board.
-      logActivity(`lens “${title}” came back EMPTY (0 rows) — not added. Check the code (field names? types?) or drop the idea.`);
+      step('failed', { tone: 'warn', detail: 'came back EMPTY (0 rows); check field names and types, or drop the idea' });
       return;
     }
     out = out.slice(0, 5000).map((r) => (r && typeof r === 'object' ? r : { value: r }));
@@ -823,11 +1088,13 @@ const T = (() => {
       rowcount: out.length, materialized: out.length, schema, sample: out.slice(0, 3),
     });
     G.submit(lensesSrc, ZSet.fromRows([rec({ name, title, description, source: srcName, code, rowcount: out.length, ver })]), prov('agent'));
-    logActivity(`authored lens “${title}” — ${out.length} rows from ${srcTitle(srcName)}`);
-    const sq = append('view', { text: title, sub: description, view: 'table' });
-    renderTableInto(`item:${sq}:body`, `v${sq}`, out.slice(0, 8), Object.keys(schema),
-      `${out.length} rows · a lens over ${srcTitle(srcName)}${out.length > 8 ? ' · showing the first 8' : ''}`);
-    cardOpen(sq, title, { type: 'open_source', name: lname });
+    logStep('built', title, {
+      subject: 'lens:' + name,
+      detail: `${fmtInt(out.length)} rows from ${srcTitle(srcName)}${ver > 1 ? ` · v${ver}` : ''}`,
+      ev: { type: 'open_source', name: lname },
+    });
+    // The lens lands on the BOARD, quietly.  Nothing enters the chat by itself —
+    // if the agent wants the user to see it, it `show`s it: a deliberate act.
   }
 
   // The composition chain of a derived source: walk the from-links back to the raw
@@ -847,53 +1114,86 @@ const T = (() => {
   // Give any lens or source a better human title/description — an event like all else.
   function doDescribe(rawName, title, description, origin) {
     const name = String(rawName || '');
-    const key = sources.has(name) ? name : (sources.has('lens:' + name) ? 'lens:' + name : null);
-    if (!key) { logActivity(`describe: no lens or source “${name}”`); return; }
+    const resolved = resolveSourceName(name);
+    const key = sources.has(resolved) ? resolved : (sources.has('lens:' + name) ? 'lens:' + name : null);
+    if (!key) {
+      logStep('failed', name, { subject: name, tone: 'error', detail: 'nothing by that name to describe' });
+      return;
+    }
     G.submit(describeSrc, ZSet.fromRows([rec({
       name: key, title: String(title || ''), description: String(description || ''), origin: String(origin || ''),
     })]), prov('agent'));
-    logActivity(`described “${(sources.get(key) || {}).title || key}”`);
+    logStep('described', (sources.get(key) || {}).title || key,
+      { subject: key, ev: { type: 'open_source', name: key } });
   }
 
   // The agent inspects a source: quick stats + data-quality signals (empties,
   // duplicate keys) over the materialized rows.  The result lands in the activity
-  // log, which the agent perceives next turn — its analysis loop.
+  // log, which the agent perceives next turn — its analysis loop.  The step reads
+  // like a person's summary: identifiers are never ranged, timestamps read as dates,
+  // constants are skipped, empties are percentages, and counts carry separators.
   function inspectSource(src) {
-    const meta = sources.get(src);
+    const key = resolveSourceName(src);
+    const meta = sources.get(key);
+    const title = srcTitle(key);
     if (meta && meta.kind === 'documents') {
       const types = {};
       meta.docs.forEach((d) => { const e = String(d.name).split('.').pop().toLowerCase(); types[e] = (types[e] || 0) + 1; });
-      logActivity(`inspected “${src}”: ${meta.docs.length} files · ${Object.entries(types).map(([k, v]) => `${v} ${k}`).join(', ')}`);
+      logStep('inspected', title, {
+        subject: key,
+        detail: `${meta.docs.length} files · ${Object.entries(types).map(([k, v]) => `${v} ${k}`).join(', ')}`,
+        ev: { type: 'open_source', name: key },
+      });
       return;
     }
-    const id = sourceIds.get(src);
-    if (id === undefined) { logActivity(`no source “${src}” to inspect`); return; }
+    const id = sourceIds.get(key);
+    if (id === undefined) {
+      logStep('failed', String(src), { subject: String(src), tone: 'error', detail: 'nothing by that name to check; mount or build it first' });
+      return;
+    }
     const rows = G.stateOf(id).support().map((r) => r.asObject());
-    const cols = Object.keys((sources.get(src) || {}).schema || {});
+    const cols = Object.keys((meta || {}).schema || {});
     const stats = [];
     cols.forEach((c) => {
-      if (/id$/i.test(c)) return; // identifiers are labels, not measurements
+      if (/ids?$/i.test(c)) return; // identifiers (id, assetIds, parentId…) are labels, not measurements
       // only REAL numbers count — booleans and empty strings coerce to 0/1 and
       // produce nonsense ranges like "isString 0–1" or "unit 0–0"
       const nums = rows.map((r) => r[c]).filter((v) => typeof v === 'number' && Number.isFinite(v));
-      if (nums.length > rows.length * 0.5 && nums.length) {
-        stats.push(`${c} ${fmtNum(Math.min(...nums))}–${fmtNum(Math.max(...nums))}`);
+      if (nums.length <= rows.length * 0.5 || !nums.length) return;
+      // timestamps read as dates, not 13-digit numbers; zeros are missing, not data
+      if (/(time|date)$/i.test(c) || nums.every((v) => v === 0 || v > 3e10)) {
+        const live = nums.filter((v) => v > 0);
+        if (!live.length) return;
+        const lo = fmtDate(Math.min(...live)), hi = fmtDate(Math.max(...live));
+        stats.push(lo === hi ? `${c} on ${lo}` : `${c} ${lo} → ${hi}`);
+        return;
       }
+      const lo = Math.min(...nums), hi = Math.max(...nums);
+      if (lo === hi) return; // a constant says nothing worth a range
+      stats.push(`${c} ${fmtNum(lo)}–${fmtNum(hi)}`);
     });
-    const issues = [];
+    const gaps = [];
     cols.forEach((c) => {
       const n = rows.filter((r) => r[c] == null || r[c] === '').length;
-      if (n) issues.push(`${c}: ${n} empty`);
+      if (!n) return;
+      const pct = Math.round((n / rows.length) * 100);
+      gaps.push(`${c} ${n === rows.length ? 'always' : `${pct || '<1'}%`} empty`);
     });
-    if (cols.length) {
+    let dupFact = '';
+    if (cols.length && rows.length) {
       const c0 = cols[0]; const seen = new Set(); let dup = 0;
       rows.forEach((r) => { const v = String(r[c0]); if (seen.has(v)) dup += 1; else seen.add(v); });
-      if (dup) issues.push(`${c0}: ${dup} duplicates`);
+      if (dup) dupFact = `${fmtInt(dup)} rows repeat the same ${c0}`;
     }
     const more = (arr, n) => arr.slice(0, n).join(', ') + (arr.length > n ? ` +${arr.length - n} more` : '');
-    logActivity(`inspected “${src}” — ${rows.length} rows · ${cols.length} cols`
-      + (stats.length ? ` · ${more(stats, 2)}` : '')
-      + (issues.length ? ` · gaps: ${more(issues, 3)}` : ' · no gaps'));
+    const size = meta && meta.rowcount > rows.length
+      ? `sampled ${fmtInt(rows.length)} of ${fmtInt(meta.rowcount)} rows`
+      : `${fmtInt(rows.length)} rows`;
+    const parts = [size, `${cols.length} columns`];
+    if (stats.length) parts.push(more(stats, 2));
+    parts.push(gaps.length ? `gaps: ${more(gaps, 3)}` : 'no gaps');
+    if (dupFact) parts.push(dupFact);
+    logStep('inspected', title, { subject: key, detail: parts.join(' · '), ev: { type: 'open_source', name: key } });
   }
 
   // ---- inline rich views (§11.6, §11.16): the AGENT communicates through visuals ----
@@ -980,7 +1280,7 @@ const T = (() => {
     b.add('text', 'ymin', 'svg', 4); b.set('ymin', 'x', pad - 8); b.set('ymin', 'y', H - pad); b.set('ymin', 'class', 'chart-lbl'); b.text('ymin', fmtNum(vmin));
   }
   function chartInlineMessage(label, msg) {
-    logActivity(`chart “${label}”: ${msg}`);
+    logStep('failed', String(label), { subject: `chart:${label}`, tone: 'warn', detail: `no chart: ${msg}` });
   }
 
   function renderDocInto(root, pfx, name) {
@@ -1012,7 +1312,7 @@ const T = (() => {
       cardOpen(sq, title, { type: 'open_document', name: String(name) });
       return;
     }
-    const srcName = String(a.source || a.name || '');
+    const srcName = resolveSourceName(a.source || a.name);
     const s = sources.get(srcName);
     if (!s) { append('system', { text: `No source “${srcName}” to show — mount it first.` }); return; }
     if (view === 'tree' || view === 'hierarchy') {
@@ -1048,7 +1348,10 @@ const T = (() => {
       case 'show': doShow(a); break;
       case 'plan': {
         const items = Array.isArray(a.items) ? a.items : [a.text || a.item];
-        items.filter(Boolean).forEach((t) => addAgenda(t));
+        items.filter(Boolean).forEach((t) => {
+          if (typeof t === 'object') addAgenda(t.title || t.text, t.description);
+          else addAgenda(t);
+        });
         break;
       }
       case 'work':
@@ -1057,7 +1360,10 @@ const T = (() => {
         break;
       case 'done': {
         const ref = a.task != null ? a.task : a.text;
-        if (ref != null && setAgenda(ref, 'done')) logActivity(`done: ${ref}`);
+        if (ref != null) {
+          const hit = setAgenda(ref, 'done');
+          if (hit != null) logStep('finished', agenda.get(hit).text, { task: hit });
+        }
         break;
       }
       case 'finding': addFinding(a); break;
@@ -1122,8 +1428,14 @@ const T = (() => {
       openAgentPage(e.panel);
     } else if (e.type === 'open_task') {
       openTask(e.id, e.panel);
+    } else if (e.type === 'open_step') {
+      openStep(e.seq, e.n, e.panel);
     } else if (e.type === 'set_task') {
       setTaskStatus(e.id, e.status);
+    } else if (e.type === 'pause' || e.type === 'resume') {
+      // captured raw like everything else; the Rust boundary flips the agent's
+      // gate.  A quiet system line in the chat confirms the user's own action.
+      append('system', { text: e.type === 'pause' ? 'Twin paused: no background work until you resume.' : 'Twin resumed.' }, `input#${e.seq}`);
     } else if (e.type === 'close_panel') {
       closePanel(e.panel);
     } else if (e.type === 'star') {
@@ -1181,7 +1493,10 @@ const T = (() => {
       case 'open_board': return 'opened the twin board';
       case 'open_agent': return 'checked what the agent is doing';
       case 'open_task': return `opened task #${e.id}`;
+      case 'open_step': return 'looked at one of the agent’s steps';
       case 'set_task': return `set task #${e.id} to ${e.status}`;
+      case 'pause': return 'paused the twin';
+      case 'resume': return 'resumed the twin';
       case 'close_panel': return 'closed a column';
       case 'open_finding': return `opened finding #${e.id}`;
       case 'resolve_finding': return `resolved finding #${e.id}`;
@@ -1194,13 +1509,20 @@ const T = (() => {
   // Everything here is a fold over the event streams above — including userActions,
   // the user's RAW behavior, from which the agent derives goals and intent.
   function perceive() {
-    const recent = feed.items.slice(-40).map((it) => ({ kind: it.kind, text: it.text, options: it.options }));
+    // The CHAT is not the context window: what the agent perceives as "feed" is
+    // the conversation proper — what the user said and what the agent chose to
+    // tell them.  Cards and rendered views are UI furniture, not conversation;
+    // the agent's real context is the structured state around this (sources,
+    // agenda, findings, lenses, activity), independent of what's on screen.
+    const CONVO = new Set(['user', 'agent', 'question', 'thought', 'system']);
+    const recent = feed.items.filter((it) => CONVO.has(it.kind)).slice(-40)
+      .map((it) => ({ kind: it.kind, text: it.text, options: it.options }));
     const srcs = [...sources].map(([name, s]) => ({
       name, title: s.title, description: s.description,
       residence: s.residence, rowcount: s.rowcount, schema: s.schema, sample: s.sample,
     }));
     const sks = [...skills].map(([name, s]) => ({ name, description: s.description }));
-    const ag = [...agenda].map(([id, a]) => ({ id, text: a.text, status: a.status }));
+    const ag = [...agenda].map(([id, a]) => ({ id, text: a.text, description: a.desc, status: a.status }));
     return JSON.stringify({
       profile: profile.asObject(),
       sources: srcs,
@@ -1209,7 +1531,7 @@ const T = (() => {
       agendaDone: ag.filter((a) => a.status === 'done').length,
       findings: [...findings.values()].slice(-8).map((f) => ({ severity: f.severity, text: f.text })),
       lenses: [...lenses].map(([name, l]) => ({ name: 'lens:' + name, title: l.title, description: l.description, source: l.source, rowcount: l.rowcount })),
-      activity: activityTail.slice(-8).map((a) => a.text),
+      activity: activityTail.slice(-8).map(stepLine),
       userActions: userActions.slice(-10),
       feed: recent,
     });
