@@ -234,10 +234,28 @@
   const statusbar = document.getElementById("statusbar");
   const agentNowText = document.getElementById("agent-now-text");
 
+  // On (re)connect the server replays the FULL mutation log — so the DOM must be
+  // reset to zero first, or every reconnect (server restart, network blip) would
+  // re-create everything on top of what's already rendered: N reconnects = N copies.
+  const STATIC_ROOTS = ["feed-root", "skills-root", "agent-plan", "agent-act", "stars-root", "recents-root"];
+  function resetDom() {
+    nodes.clear();
+    STATIC_ROOTS.forEach((id) => {
+      const el = document.getElementById(id);
+      el.textContent = "";
+      nodes.set(id, el);
+    });
+    boardRoot.textContent = "";
+    nodes.set("board-root", boardRoot);
+    panels.length = 0;
+    stackEl.textContent = "";
+    appEl.classList.remove("split");
+  }
+
   let ws;
   function connect() {
     ws = new WebSocket(`ws://${location.host}/ws`);
-    ws.onopen = () => { statusEl.classList.add("live"); statusText.textContent = "live"; };
+    ws.onopen = () => { resetDom(); statusEl.classList.add("live"); statusText.textContent = "live"; };
     ws.onclose = () => {
       statusEl.classList.remove("live"); statusText.textContent = "reconnecting…";
       setTimeout(connect, 1000);

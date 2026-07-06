@@ -88,6 +88,7 @@ Rules:
 - Call it "the twin" — the model of their operation, never a twin "of you".
 - Be concise and human. One idea at a time. Don't repeat yourself; continue the conversation naturally.
 - Think at most once before acting. If the last feed item is your own thought, act — do not think again.
+- NEVER repeat a tool call you already made this turn — each step must do something new. One `show` per thing shown.
 - Record profile facts the moment you learn them.
 - If the user's latest message contains a file path, your VERY NEXT action MUST be read_source with that exact path.
 - You both act AND ask — take initiative on safe, reversible work, and ask the user pointed questions to steer it. Don't ask permission for reversible steps; do ask for the judgment and domain knowledge only they have. End each foreground turn by say-ing what you did/showing it, or by ask-ing."#;
@@ -144,6 +145,11 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<()>) -> O
     let mut acted = false;
     let mut said = false;
     let mut preempted = false;
+    // exact tool calls already applied this turn — a repeat means the model is
+    // looping, and MUST NOT be applied again (it would render duplicate cards).
+    let mut emitted: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut suppressed = false;
+    let mut stuck = 0;
     for _ in 0..MAX_STEPS {
         if background && wake.try_recv().is_ok() {
             preempted = true;
@@ -152,23 +158,30 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<()>) -> O
         let ctx = perceive(tx);
         // Deterministic nudges — small local models need hard rails, not suggestions:
         // (a) a data-file path in the user's message MUST trigger read_source;
-        // (b) after one think, the next output MUST be an action (observed failure
-        //     mode: gemma re-emits near-identical thoughts until the step cap).
-        let base = if background {
+        // (b) after one think, the next output MUST be an action;
+        // (c) after a suppressed repeat, the next output MUST be something NEW
+        //     (observed failure modes: gemma re-emits near-identical thoughts, and
+        //      re-emits the same show/inspect/make_lens until the step cap).
+        let mut nudge = if background {
             BACKGROUND_BRIEF.to_string()
         } else {
             path_nudge(&ctx).unwrap_or_default()
         };
-        let nudge = if thoughts >= 1 {
+        if thoughts >= 1 {
             let acts = if background {
                 "plan / work / done / inspect / finding / make_lens / show / record_profile / ask / idle"
             } else {
                 "say / ask / show / inspect / plan / finding / make_lens / record_profile / read_source"
             };
-            format!("{base}\n\nYou have ALREADY thought this turn. Your next output MUST be an ACTION tool ({acts}) — NOT think.")
-        } else {
-            base
-        };
+            nudge.push_str(&format!(
+                "\n\nYou have ALREADY thought this turn. Your next output MUST be an ACTION tool ({acts}) — NOT think."
+            ));
+        }
+        if suppressed {
+            nudge.push_str(
+                "\n\nYou ALREADY made that exact tool call this turn — it was applied ONCE and its result is in your context. Do NOT emit it again. Do something DIFFERENT, or end the turn (say / ask / idle).",
+            );
+        }
         let content = match call_model(model, &ctx, &nudge) {
             Ok(c) => c,
             Err(e) => {
@@ -185,7 +198,6 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<()>) -> O
             if background { IDLE_TOOL.to_string() } else { say_json(content.trim()) }
         });
         let name = tool_name(&tool);
-        eprintln!("[agent{}] {name}: {}", if background { "·bg" } else { "" }, preview(&tool));
         if name == "idle" {
             break; // nothing worth doing — not forwarded, just paces the loop
         }
@@ -194,9 +206,20 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<()>) -> O
             if thoughts > 1 {
                 continue; // don't spin on thinking; re-prompt for an action
             }
+        } else if !emitted.insert(tool.clone()) {
+            // an exact repeat: never apply it twice — one duplicate card per repeat
+            // is exactly the bug this prevents.  Two repeats = the model is stuck.
+            eprintln!("[agent{}] repeat suppressed: {}", if background { "·bg" } else { "" }, preview(&tool));
+            suppressed = true;
+            stuck += 1;
+            if stuck >= 2 {
+                break;
+            }
+            continue;
         } else {
             acted = true;
         }
+        eprintln!("[agent{}] {name}: {}", if background { "·bg" } else { "" }, preview(&tool));
         emit(tx, &tool);
         // A turn ends when the agent addresses the user.
         if name == "say" || name == "ask" {
