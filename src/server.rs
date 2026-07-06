@@ -89,20 +89,28 @@ fn graph_loop(rx: Receiver<Cmd>, wake: Sender<()>) {
             println!("{status}");
         }
     }
-    // register the pulled documents (P&IDs etc.) as a viewable source
-    if let Ok(rd) = std::fs::read_dir("data/cognite/files") {
-        let docs: Vec<serde_json::Value> = rd
-            .flatten()
-            .filter_map(|e| {
-                let name = e.file_name().into_string().ok()?;
-                let bytes = e.metadata().ok()?.len();
-                Some(serde_json::json!({ "name": name, "bytes": bytes }))
+    // register the pulled documents (P&IDs etc.), carrying their asset links so each
+    // shows up on the dashboards of the equipment it depicts
+    let docs: Vec<serde_json::Value> = std::fs::read_to_string("data/cognite/files.json")
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| {
+            v.as_array().map(|arr| {
+                arr.iter()
+                    .filter_map(|f| {
+                        let name = f["name"].as_str()?.to_string();
+                        let bytes = std::fs::metadata(format!("data/cognite/files/{name}"))
+                            .map(|m| m.len())
+                            .unwrap_or(0);
+                        Some(serde_json::json!({ "name": name, "bytes": bytes, "assetIds": f["assetIds"].clone() }))
+                    })
+                    .collect::<Vec<_>>()
             })
-            .collect();
-        if !docs.is_empty() {
-            g.twin_register_documents(&serde_json::to_string(&docs).unwrap_or_else(|_| "[]".into()));
-            println!("registered {} documents", docs.len());
-        }
+        })
+        .unwrap_or_default();
+    if !docs.is_empty() {
+        g.twin_register_documents(&serde_json::to_string(&docs).unwrap_or_else(|_| "[]".into()));
+        println!("registered {} documents", docs.len());
     }
 
     let mut clients: Vec<Sender<String>> = Vec::new();

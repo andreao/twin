@@ -283,6 +283,19 @@ const T = (() => {
         });
       });
     }
+
+    // Documents — the P&IDs/drawings that reference this asset (they carry assetIds,
+    // so each drawing lands on the dashboard of the equipment it depicts).
+    const docs = ((sources.get('documents') || {}).docs || [])
+      .filter((d) => (d.assetIds || []).map(String).includes(aid));
+    vadd('div', 'ad:dt', 'explorer-root', 7); vset('ad:dt', 'class', 'ad-section'); vtext('ad:dt', `Documents — ${docs.length}`);
+    vadd('div', 'ad:dl', 'explorer-root', 8); vset('ad:dl', 'class', 'sens-list');
+    if (!docs.length) { vadd('div', 'ad:dn', 'ad:dl', 0); vset('ad:dn', 'class', 'ad-empty'); vtext('ad:dn', 'no drawings reference this asset'); }
+    docs.forEach((d, i) => {
+      const k = `doc:${d.name}`;
+      vadd('div', k, 'ad:dl', i); vset(k, 'class', 'sens-row');
+      vadd('span', `${k}:n`, k, 0); vset(`${k}:n`, 'class', 'sens-n'); vtext(`${k}:n`, d.name);
+    });
   }
 
   // Search — a PARAMETRIZED lens (§9.11): parametrized by the query, it derives

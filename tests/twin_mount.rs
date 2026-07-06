@@ -160,11 +160,15 @@ fn asset_dashboard_composes_sensors_and_events() {
     g.twin_read_source("assets", a.to_str().unwrap(), "mounted");
     g.twin_read_source("timeseries", t.to_str().unwrap(), "mounted");
     g.twin_read_source("events", e.to_str().unwrap(), "mounted");
+    // a P&ID that references asset 10 and an unrelated one that does not
+    g.twin_register_documents(r#"[{"name":"PID-10.pdf","bytes":10,"assetIds":[10]},{"name":"other.pdf","bytes":20,"assetIds":[77]}]"#);
     g.twin_event(r#"{"type":"open_asset","id":"10"}"#);
     let d = g.twin_from(0);
     assert!(d.contains("Compressor"), "no asset header");
     assert!(d.contains("sens:99") && d.contains("VAL-TT-1"), "sensor not linked by assetId");
     assert!(d.contains("seal swap"), "event not linked by assetIds");
+    assert!(d.contains("doc:PID-10.pdf"), "P&ID referencing this asset missing from dashboard");
+    assert!(!d.contains("doc:other.pdf"), "unrelated drawing should not appear on this asset");
 }
 
 #[test]
