@@ -42,10 +42,11 @@
   .feed-item.agent .text { font-size: 15px; }
   .feed-item.user { display: flex; justify-content: flex-end; }
   .feed-item.user .text { background: var(--user); padding: 9px 14px; border-radius: 14px 14px 3px 14px; max-width: 82%; }
-  /* thoughts are ambient: one clamped italic line, click to unfold */
-  .feed-item.thought { padding: 1px 0 3px; cursor: pointer; }
-  .feed-item.thought .text { color: var(--muted); font-size: 12.5px; font-style: italic; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
-  .feed-item.thought .text::before { content: "✳ "; font-style: normal; }
+  /* the agent's reasoning: a quiet card in normal type — WHY it's about to do
+     what it does next. Clamped to two lines; click to unfold. */
+  .feed-item.thought { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 9px 14px; margin: 5px 0; cursor: pointer; }
+  .feed-item.thought .text { color: #6b665e; font-size: 13px; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .feed-item.thought .text::before { content: "✳ "; color: var(--accent); }
   .feed-item.thought.open .text { -webkit-line-clamp: unset; }
   .feed-item.system { padding: 4px 0; }
   .feed-item.system .text { display: inline-block; background: var(--accent-soft); color: #7a4a38; font-size: 12.5px; padding: 5px 11px; border-radius: 8px; }
@@ -105,11 +106,14 @@
   .feed-item.view .doc-frame { width: 100%; height: 44vh; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
   .feed-item.view .doc-img { max-width: 100%; border: 1px solid var(--line); border-radius: 8px; }
 
-  /* the in-progress card: work happening right now, styled like the card it will
-     become when it finishes */
-  .working { max-width: 712px; margin: 0 auto 6px; width: calc(100% - 48px); padding: 10px 14px; color: var(--muted); font-size: 12.5px; display: none; align-items: center; gap: 9px; background: var(--bg); border: 1px dashed var(--line); border-radius: 12px; }
+  /* the in-progress card: what's being worked on right now, shaped like the action
+     card it will become — the spinner alone says "in progress" */
+  .working { max-width: 712px; margin: 0 auto 6px; width: calc(100% - 48px); padding: 10px 14px; display: none; align-items: center; gap: 11px; background: var(--bg); border: 1px dashed var(--line); border-radius: 12px; }
   .working.on { display: flex; }
-  #working-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .working-body { flex: 1; min-width: 0; }
+  .working-title { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .working-sub { color: var(--muted); font-size: 12px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .working-sub:empty { display: none; }
   .spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--accent-soft); border-top-color: var(--accent); animation: spin .7s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -245,7 +249,13 @@
   <!-- the conversation: front and center, time as the vertical axis -->
   <section class="conv">
     <div class="feedwrap" id="feedwrap"><div class="feed" id="feed-root"></div></div>
-    <div class="working" id="working"><span class="spin"></span> <span id="working-text">the agent is thinking…</span></div>
+    <div class="working" id="working">
+      <span class="spin"></span>
+      <div class="working-body">
+        <div class="working-title" id="working-title">Working…</div>
+        <div class="working-sub" id="working-text"></div>
+      </div>
+    </div>
     <div class="composer" id="composer">
       <div class="composer-inner">
         <textarea id="input" rows="1" placeholder="Ask, steer, or point the agent at data…"></textarea>
@@ -253,11 +263,12 @@
       </div>
     </div>
     <!-- the status bar: what's running in the background — click to open the twin -->
-    <div class="statusbar" id="statusbar" title="Open the twin">
+    <div class="statusbar" id="statusbar" title="See what the agent is doing">
       <span class="now-dot"></span>
       <span id="agent-now-text">idle</span>
       <span id="agent-act"></span>
       <span id="agent-plan"></span>
+      <span id="agent-doing" hidden></span>
       <span id="status-open">the twin ▸</span>
     </div>
   </section>
@@ -275,7 +286,7 @@
   // star / close) is client furniture; panel BODIES are registered as roots the
   // server renders into with p<i>:-prefixed keys.
   const nodes = new Map();
-  ["feed-root", "skills-root", "agent-plan", "agent-act", "stars-root", "recents-root"]
+  ["feed-root", "skills-root", "agent-plan", "agent-act", "agent-doing", "stars-root", "recents-root"]
     .forEach((id) => nodes.set(id, document.getElementById(id)));
 
   // the twin board is a LIVE node: it exists detached from birth, grows as the agent
@@ -290,6 +301,16 @@
   const statusText = document.getElementById("statustext");
   const workingEl = document.getElementById("working");
   const workingText = document.getElementById("working-text");
+  const workingTitle = document.getElementById("working-title");
+  let statusOn = false, statusBg = false;
+  // the in-progress card: title = the ACTIVE agenda item (what it's working on),
+  // sub = the latest activity note — refreshed live as folds update the slots
+  function refreshWorking() {
+    if (!statusOn) return;
+    const doing = document.getElementById("agent-doing").textContent;
+    workingTitle.textContent = statusBg ? (doing || "Working on the twin") : "Thinking";
+    workingText.textContent = document.getElementById("agent-act").textContent;
+  }
   const input = document.getElementById("input");
   const sendBtn = document.getElementById("send");
   const appEl = document.getElementById("app");
@@ -324,7 +345,7 @@
   // On (re)connect the server replays the FULL mutation log — so the DOM must be
   // reset to zero first, or every reconnect (server restart, network blip) would
   // re-create everything on top of what's already rendered: N reconnects = N copies.
-  const STATIC_ROOTS = ["feed-root", "skills-root", "agent-plan", "agent-act", "stars-root", "recents-root"];
+  const STATIC_ROOTS = ["feed-root", "skills-root", "agent-plan", "agent-act", "agent-doing", "stars-root", "recents-root"];
   function resetDom() {
     nodes.clear();
     STATIC_ROOTS.forEach((id) => {
@@ -352,6 +373,7 @@
       const msg = JSON.parse(e.data);
       if (msg.type === "mutations") {
         msg.batch.forEach(applyMutation);
+        refreshWorking(); // keep the in-progress card current mid-turn
         if (freshSnapshot) {
           // land at NOW — the bottom of the time axis — not at the beginning
           // (re-assert after layout settles: fonts/flex can shift heights late)
@@ -366,16 +388,11 @@
         }
       }
       else if (msg.type === "status") {
-        // the in-feed working line runs for BOTH kinds of turns, so it's always
-        // visible in the chat that something is being worked on right now
-        const on = !!msg.working, bg = !!msg.background;
-        workingEl.classList.toggle("on", on);
-        const act = document.getElementById("agent-act").textContent;
-        workingText.textContent = on
-          ? (bg ? "working in the background…" + (act ? " " + act : "") : "the agent is thinking…")
-          : "";
-        statusbar.classList.toggle("on", on);
-        agentNowText.textContent = on ? (bg ? "working in the background" : "thinking") : "idle";
+        statusOn = !!msg.working; statusBg = !!msg.background;
+        workingEl.classList.toggle("on", statusOn);
+        statusbar.classList.toggle("on", statusOn);
+        agentNowText.textContent = statusOn ? (statusBg ? "working" : "thinking") : "idle";
+        refreshWorking();
         autoscroll();
       }
     };

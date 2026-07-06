@@ -293,6 +293,8 @@ fn agent_keeps_an_agenda_and_activity_log() {
     let muts = g.twin_from(0);
     assert!(muts.contains("agent-plan") && muts.contains("Profile the turbines source"), "plan line missing: {muts}");
     assert!(muts.contains("agent-act") && muts.contains("profiling turbines"), "activity line missing");
+    // the ACTIVE item feeds the in-progress card's title
+    assert!(muts.contains(r#""key":"agent-doing","text":"Profile the turbines source""#), "active item not exported: {muts}");
     // status changes are new EVENTS; when the active item is done, the fold moves on
     g.twin_agent_tool(r#"{"tool":"done","args":{"task":"profile"}}"#);
     assert!(g.twin_from(0).contains("next: Look for data gaps"), "plan line did not advance");

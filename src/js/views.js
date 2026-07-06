@@ -183,8 +183,9 @@ class AgendaPanel {
     const all = [...this.items.values()];
     const open = all.filter((i) => i.status !== 'done');
     const active = all.find((i) => i.status === 'active');
-    // the strip's activity slot already says what's happening NOW, so this line
-    // shows what comes NEXT (the open items beyond the active one)
+    // what's being worked on NOW — the in-progress card's title
+    TWIN_MUT.push({ op: 'setText', key: 'agent-doing', text: active ? active.text : '' });
+    // …and what comes NEXT (the open items beyond the active one)
     const next = open.filter((i) => i !== active);
     const line = next.length
       ? `next: ${next[0].text}${next.length > 1 ? `  (+${next.length - 1})` : ''}`
