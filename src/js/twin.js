@@ -67,18 +67,21 @@ const T = (() => {
   const activityTail = [];     // recent activity notes (perception window)
   const userActions = [];      // recent raw user actions, described (perception window)
 
+  let activeTaskId = null; // which agenda item the agent is working under, if any
   G.observe(agendaSrc, (delta) => {
     for (const [row] of delta.entries()) {
       const r = row.asObject();
       const text = r.text || (agenda.get(r.id) || {}).text || '';
       agenda.set(r.id, { text, status: r.status });
+      if (r.status === 'active') activeTaskId = r.id;
+      else if (r.id === activeTaskId) activeTaskId = null;
       agendaPanel.set(r.id, text, r.status);
     }
   });
   G.observe(activitySrc, (delta) => {
     for (const [row] of delta.entries()) {
       const r = row.asObject();
-      activityTail.push(r.text);
+      activityTail.push({ text: r.text, task: r.task || 0 });
       if (activityTail.length > 60) activityTail.shift();
       activityPanel.add(r.seq, r.text);
     }
@@ -625,11 +628,13 @@ const T = (() => {
     return true;
   }
   let actSeq = 0;
-  function logActivity(text) {
+  // Every work note is stamped with the agenda item it happened under, so a task's
+  // page can show "the work so far" scoped to that task.
+  function logActivity(text, taskId) {
     const t = String(text);
-    if (activityTail.length && activityTail[activityTail.length - 1] === t) return; // no stutter
+    if (activityTail.length && activityTail[activityTail.length - 1].text === t) return; // no stutter
     actSeq += 1;
-    G.submit(activitySrc, ZSet.fromRows([rec({ seq: actSeq, text: t })]), prov('agent'));
+    G.submit(activitySrc, ZSet.fromRows([rec({ seq: actSeq, text: t, task: taskId != null ? Number(taskId) : (activeTaskId || 0) })]), prov('agent'));
   }
   let findingSeq = 0;
   function addFinding(a) {
@@ -679,47 +684,92 @@ const T = (() => {
     V.text('fd:resolve', f.status === 'resolved' ? 'Resolved ✓' : 'Mark resolved');
   }
 
-  // The AGENT page — what's happening in the background, tidily: the agenda as a
-  // checklist, then the recent work log.  Opened from the status bar.
-  function openAgentPage(panel) {
-    const V = viewer(panel, 'Agent', { type: 'open_agent' });
-    V.add('div', 'ag:note', null, 0); V.set('ag:note', 'class', 'explorer-note');
-    const openCount = [...agenda.values()].filter((a) => a.status !== 'done').length;
-    V.text('ag:note', `what the agent is working on, planning, and recently did · ${lenses.size} lenses authored · ${[...findings.values()].filter((f) => f.status !== 'resolved').length} open findings`);
-    V.add('div', 'ag:h1', null, 1); V.set('ag:h1', 'class', 'ad-section'); V.text('ag:h1', `Agenda — ${openCount} open`);
-    V.add('div', 'ag:list', null, 2); V.set('ag:list', 'class', 'agent-block');
-    if (!agenda.size) { V.add('div', 'ag:none', 'ag:list', 0); V.set('ag:none', 'class', 'ad-empty'); V.text('ag:none', 'no agenda yet — the agent plans its own work here'); }
-    let i = 0;
-    for (const [id, a] of agenda) {
-      const k = `ag:${id}`;
-      V.add('div', k, 'ag:list', i++); V.set(k, 'class', `ag-row ${a.status}`);
-      V.add('span', `${k}:s`, k, 0); V.set(`${k}:s`, 'class', 'ag-s'); V.text(`${k}:s`, a.status === 'done' ? '✓' : a.status === 'active' ? '●' : '○');
-      V.add('span', `${k}:t`, k, 1); V.set(`${k}:t`, 'class', 'ag-t'); V.text(`${k}:t`, a.text);
-    }
-    V.add('div', 'ag:h2', null, 3); V.set('ag:h2', 'class', 'ad-section'); V.text('ag:h2', 'Recent activity');
-    V.add('div', 'ag:acts', null, 4); V.set('ag:acts', 'class', 'agent-block');
-    if (!activityTail.length) { V.add('div', 'ag:qn', 'ag:acts', 0); V.set('ag:qn', 'class', 'ad-empty'); V.text('ag:qn', 'quiet so far'); }
-    // newest first, duplicates collapsed, each row split verb | what — one shape
-    const VERBS = [
-      [/^authored lens\s*/, 'built'], [/^inspected\s*/, 'inspected'], [/^described\s*/, 'described'],
-      [/^finding \((\w+)\):\s*/, 'flagged'], [/^done:\s*/, 'finished'], [/^lens\s*/, 'lens'],
-      [/^chart\s*/, 'chart'],
-    ];
+  // One row shape for every work line — a small label column and the text.
+  const VERBS = [
+    [/^authored lens\s*/, 'built'], [/^inspected\s*/, 'inspected'], [/^described\s*/, 'described'],
+    [/^finding \(\w+\):\s*/, 'flagged'], [/^done:\s*/, 'finished'], [/^lens\s*/, 'lens'],
+    [/^chart\s*/, 'chart'],
+  ];
+  function workRow(V, parent, key, idx, label, text, cls, clickable) {
+    V.add('div', key, parent, idx); V.set(key, 'class', `act-row${cls ? ' ' + cls : ''}`);
+    V.add('span', `${key}:v`, key, 0); V.set(`${key}:v`, 'class', 'act-verb'); V.text(`${key}:v`, label);
+    V.add('span', `${key}:t`, key, 1); V.set(`${key}:t`, 'class', 'act-text'); V.text(`${key}:t`, text);
+    if (clickable) V.set(key, 'data-title', text);
+  }
+  function activityRows(V, parent, keyPfx, entries) {
     const shown = new Set();
     let ai = 0;
-    activityTail.slice().reverse().forEach((t) => {
-      if (shown.has(t)) return;
-      shown.add(t);
-      let verb = '·', rest = t;
+    entries.forEach((e) => {
+      if (shown.has(e.text)) return;
+      shown.add(e.text);
+      let verb = '·', rest = e.text;
       for (const [re, v] of VERBS) {
-        if (re.test(t)) { verb = v; rest = t.replace(re, ''); break; }
+        if (re.test(e.text)) { verb = v; rest = e.text.replace(re, ''); break; }
       }
-      const k = `ag:act${ai}`;
-      V.add('div', k, 'ag:acts', ai); V.set(k, 'class', 'act-row');
-      V.add('span', `${k}:v`, k, 0); V.set(`${k}:v`, 'class', 'act-verb'); V.text(`${k}:v`, verb);
-      V.add('span', `${k}:t`, k, 1); V.set(`${k}:t`, 'class', 'act-text'); V.text(`${k}:t`, rest);
+      workRow(V, parent, `${keyPfx}${ai}`, ai, verb, rest, '', false);
       ai++;
     });
+    return ai;
+  }
+
+  // What's happening — the plan and the recent work, in ONE visual language.
+  // Every task row is a clickable thing that opens the task's own page.
+  function openAgentPage(panel) {
+    const V = viewer(panel, 'What’s happening', { type: 'open_agent' });
+    V.add('div', 'ag:l1', null, 0); V.set('ag:l1', 'class', 'explorer-note'); V.text('ag:l1', 'the plan');
+    V.add('div', 'ag:list', null, 1); V.set('ag:list', 'class', 'agent-block');
+    const items = [...agenda].sort((x, y) => {
+      const rank = (s) => (s === 'active' ? 0 : s === 'open' ? 1 : 2);
+      return rank(x[1].status) - rank(y[1].status);
+    });
+    if (!items.length) { V.add('div', 'ag:none', 'ag:list', 0); V.set('ag:none', 'class', 'ad-empty'); V.text('ag:none', 'no plan yet — the agent lays out its own work here'); }
+    let i = 0;
+    for (const [id, a] of items) {
+      if (a.status === 'done' && i > 8) continue;
+      workRow(V, 'ag:list', `task:${id}`, i++, a.status === 'active' ? 'now' : a.status === 'done' ? 'done' : 'next',
+        a.text, a.status === 'active' ? 'is-now' : a.status === 'done' ? 'is-done' : '', true);
+    }
+    V.add('div', 'ag:l2', null, 2); V.set('ag:l2', 'class', 'explorer-note'); V.text('ag:l2', 'recently');
+    V.add('div', 'ag:acts', null, 3); V.set('ag:acts', 'class', 'agent-block');
+    if (!activityTail.length) { V.add('div', 'ag:qn', 'ag:acts', 0); V.set('ag:qn', 'class', 'ad-empty'); V.text('ag:qn', 'quiet so far'); }
+    activityRows(V, 'ag:acts', 'ag:act', activityTail.slice().reverse());
+  }
+
+  // A TASK, opened: its status, the work done under it so far, and what you can do —
+  // same page grammar as a finding (chip · text · list · actions).
+  function openTask(id, panel) {
+    const tid = Number(id);
+    const a = agenda.get(tid);
+    const V = viewer(panel, a ? a.text.slice(0, 48) : 'Task', { type: 'open_task', id: tid });
+    if (!a) {
+      V.add('div', 'exp:note', null, 0); V.set('exp:note', 'class', 'explorer-note');
+      V.text('exp:note', `No task #${id}.`);
+      return;
+    }
+    const word = a.status === 'active' ? 'in progress' : a.status === 'done' ? 'done' : 'planned';
+    V.add('div', 'ta:st', null, 0); V.set('ta:st', 'class', `fd-sev task-${a.status}`); V.text('ta:st', word);
+    V.add('div', 'ta:t', null, 1); V.set('ta:t', 'class', 'fd-text'); V.text('ta:t', a.text);
+    V.add('div', 'ta:l', null, 2); V.set('ta:l', 'class', 'explorer-note'); V.text('ta:l', 'work so far');
+    V.add('div', 'ta:acts', null, 3); V.set('ta:acts', 'class', 'agent-block');
+    const steps = activityTail.filter((e) => e.task === tid);
+    if (!steps.length) { V.add('div', 'ta:none', 'ta:acts', 0); V.set('ta:none', 'class', 'ad-empty'); V.text('ta:none', 'no steps yet'); }
+    activityRows(V, 'ta:acts', 'ta:act', steps.slice().reverse());
+    V.add('div', 'ta:cta', null, 4); V.set('ta:cta', 'class', 'fd-cta');
+    V.add('button', 'ta:work', 'ta:cta', 0); V.set('ta:work', 'class', 'fd-btn primary');
+    V.set('ta:work', 'data-text', a.text); V.text('ta:work', 'Work on this now');
+    V.add('button', 'ta:done', 'ta:cta', 1); V.set('ta:done', 'class', 'fd-btn');
+    V.set('ta:done', 'data-id', tid); V.text('ta:done', a.status === 'done' ? 'Done ✓' : 'Mark done');
+  }
+
+  // The user re-prioritized or closed a task directly — an event, folded everywhere.
+  function setTaskStatus(id, status) {
+    const tid = Number(id);
+    const a = agenda.get(tid);
+    const s = String(status);
+    if (!a || a.status === s || !['open', 'active', 'done'].includes(s)) return;
+    G.submit(agendaSrc, ZSet.fromRows([rec({ id: tid, text: a.text, status: s })]),
+      { author: 'user', origin: 'derived', note: 'set_task' });
+    if (s === 'done') logActivity(`done: ${a.text}`, tid);
   }
 
   // Resolving a finding is an event like everything else; the folds dim it on the
@@ -1070,6 +1120,10 @@ const T = (() => {
       resolveFinding(e.id);
     } else if (e.type === 'open_agent') {
       openAgentPage(e.panel);
+    } else if (e.type === 'open_task') {
+      openTask(e.id, e.panel);
+    } else if (e.type === 'set_task') {
+      setTaskStatus(e.id, e.status);
     } else if (e.type === 'close_panel') {
       closePanel(e.panel);
     } else if (e.type === 'star') {
@@ -1126,6 +1180,8 @@ const T = (() => {
       case 'fetch': return `charted series ${e.label || e.id}`;
       case 'open_board': return 'opened the twin board';
       case 'open_agent': return 'checked what the agent is doing';
+      case 'open_task': return `opened task #${e.id}`;
+      case 'set_task': return `set task #${e.id} to ${e.status}`;
       case 'close_panel': return 'closed a column';
       case 'open_finding': return `opened finding #${e.id}`;
       case 'resolve_finding': return `resolved finding #${e.id}`;
@@ -1153,7 +1209,7 @@ const T = (() => {
       agendaDone: ag.filter((a) => a.status === 'done').length,
       findings: [...findings.values()].slice(-8).map((f) => ({ severity: f.severity, text: f.text })),
       lenses: [...lenses].map(([name, l]) => ({ name: 'lens:' + name, title: l.title, description: l.description, source: l.source, rowcount: l.rowcount })),
-      activity: activityTail.slice(-8),
+      activity: activityTail.slice(-8).map((a) => a.text),
       userActions: userActions.slice(-10),
       feed: recent,
     });

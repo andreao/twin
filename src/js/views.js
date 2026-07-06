@@ -187,11 +187,13 @@ class AgendaPanel {
   set(id, text, status) {
     const prev = this.items.get(id) || {};
     this.items.set(id, { text: text || prev.text || '', status });
-    const all = [...this.items.values()];
+    const all = [...this.items.entries()].map(([iid, it]) => ({ id: iid, ...it }));
     const open = all.filter((i) => i.status !== 'done');
     const active = all.find((i) => i.status === 'active');
-    // what's being worked on NOW — the in-progress card's title
+    // what's being worked on NOW — the in-progress card's title (and its task id,
+    // so clicking that card opens the task's own page)
     TWIN_MUT.push({ op: 'setText', key: 'agent-doing', text: active ? active.text : '' });
+    TWIN_MUT.push({ op: 'setText', key: 'agent-doing-id', text: active ? String(active.id) : '' });
     // …and what comes NEXT (the open items beyond the active one)
     const next = open.filter((i) => i !== active);
     const line = next.length

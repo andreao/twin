@@ -83,18 +83,22 @@
   .fnd.resolved { opacity: .5; }
   .fnd.resolved > div:first-child { text-decoration: line-through; }
 
-  /* the Agent page: agenda checklist + recent work log, in quiet blocks */
-  .agent-block { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 6px 10px; }
-  .ag-row { display: flex; gap: 10px; align-items: baseline; padding: 7px 8px; font-size: 13.5px; border-bottom: 1px solid var(--line); }
-  .ag-row:last-child { border-bottom: none; }
-  .ag-s { flex: none; color: var(--muted); }
-  .ag-row.active .ag-s { color: var(--accent); }
-  .ag-row.done { opacity: .55; }
-  .ag-row.done .ag-t { text-decoration: line-through; }
-  .act-row { display: flex; gap: 12px; align-items: baseline; font-size: 12.5px; padding: 6px 8px; line-height: 1.5; border-bottom: 1px solid var(--line); }
+  /* what's happening + task pages: ONE row shape for plan and activity alike —
+     a small label column, then the text */
+  .agent-block { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 6px 10px; margin-bottom: 18px; }
+  .act-row { display: flex; gap: 12px; align-items: baseline; font-size: 13px; padding: 7px 8px; line-height: 1.5; border-bottom: 1px solid var(--line); }
   .act-row:last-child { border-bottom: none; }
   .act-verb { flex: none; width: 68px; color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; padding-top: 1px; }
   .act-text { flex: 1; min-width: 0; color: var(--ink); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .act-row[data-title] { cursor: pointer; }
+  .act-row[data-title]:hover .act-text { color: var(--accent); }
+  .act-row.is-now .act-verb { color: var(--accent); font-weight: 700; }
+  .act-row.is-done { opacity: .55; }
+  .act-row.is-done .act-text { text-decoration: line-through; }
+  /* task status chips share the finding-chip grammar */
+  .fd-sev.task-active { background: var(--accent-soft); color: #7a4a38; }
+  .fd-sev.task-open { background: var(--bg); color: var(--muted); border: 1px solid var(--line); }
+  .fd-sev.task-done { background: #e7efe7; color: #3f6b48; }
   .view-body { min-height: 0; }
   .view-scroll { overflow-x: auto; max-height: 44vh; overflow-y: auto; }
   .feed-item.view .doc-frame { width: 100%; height: 44vh; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
@@ -259,6 +263,7 @@
       <span id="agent-act" hidden></span>
       <span id="agent-plan" hidden></span>
       <span id="agent-doing" hidden></span>
+      <span id="agent-doing-id" hidden></span>
       <span id="status-open">the twin ▸</span>
     </div>
   </section>
@@ -276,7 +281,7 @@
   // star / close) is client furniture; panel BODIES are registered as roots the
   // server renders into with p<i>:-prefixed keys.
   const nodes = new Map();
-  ["feed-root", "skills-root", "agent-plan", "agent-act", "agent-doing", "stars-root", "recents-root"]
+  ["feed-root", "skills-root", "agent-plan", "agent-act", "agent-doing", "agent-doing-id", "stars-root", "recents-root"]
     .forEach((id) => nodes.set(id, document.getElementById(id)));
 
   // the twin board is a LIVE node: it exists detached from birth, grows as the agent
@@ -342,7 +347,7 @@
   // On (re)connect the server replays the FULL mutation log — so the DOM must be
   // reset to zero first, or every reconnect (server restart, network blip) would
   // re-create everything on top of what's already rendered: N reconnects = N copies.
-  const STATIC_ROOTS = ["feed-root", "skills-root", "agent-plan", "agent-act", "agent-doing", "stars-root", "recents-root"];
+  const STATIC_ROOTS = ["feed-root", "skills-root", "agent-plan", "agent-act", "agent-doing", "agent-doing-id", "stars-root", "recents-root"];
   function resetDom() {
     nodes.clear();
     STATIC_ROOTS.forEach((id) => {
@@ -471,8 +476,13 @@
     send(Object.assign({}, ev, { panel: i, title: title || "" }));
   }
   // the status bar and the in-progress card open the Agent page; "the twin ▸" opens the board
-  statusbar.addEventListener("click", () => openFromEv(0, "Agent", { type: "open_agent" }));
-  workingEl.addEventListener("click", () => openFromEv(0, "Agent", { type: "open_agent" }));
+  statusbar.addEventListener("click", () => openFromEv(0, "What’s happening", { type: "open_agent" }));
+  // the in-progress card is the ACTIVE TASK's card — clicking it opens that task
+  workingEl.addEventListener("click", () => {
+    const tid = document.getElementById("agent-doing-id").textContent;
+    if (tid) openFromEv(0, document.getElementById("agent-doing").textContent || "Task", { type: "open_task", id: Number(tid) });
+    else openFromEv(0, "What’s happening", { type: "open_agent" });
+  });
   document.getElementById("status-open").addEventListener("click", (e) => {
     e.stopPropagation();
     openFromEv(0, "The twin", { type: "open_board" });
@@ -493,6 +503,12 @@
       else if (k.startsWith("doc:") && !k.includes(":n") && !k.includes(":t")) el.addEventListener("click", () => openFromEv(base + 1, k.slice(4), { type: "open_document", name: k.slice(4) }));
       else if (k === "exp:codebtn") el.addEventListener("click", () => { const code = nodes.get(`p${base}:exp:code`); if (code) code.hidden = !code.hidden; });
       else if (k === "fd:src") el.addEventListener("click", () => openFromEv(base + 1, el.dataset.title || el.dataset.name, { type: "open_source", name: el.dataset.name }));
+      else if (/^task:\d+$/.test(k)) el.addEventListener("click", () => openFromEv(base + 1, el.dataset.title || "Task", { type: "open_task", id: Number(k.slice(5)) }));
+      else if (k === "ta:work") el.addEventListener("click", () => send({ type: "user_message", text: `Work on “${el.dataset.text}” now — take the next concrete step and show me the result.` }));
+      else if (k === "ta:done") el.addEventListener("click", () => {
+        send({ type: "set_task", id: Number(el.dataset.id), status: "done" });
+        openFromEv(base, panels[base] ? panels[base].title : "Task", { type: "open_task", id: Number(el.dataset.id) });
+      });
       else if (k === "fd:investigate") el.addEventListener("click", () => send({ type: "user_message", text: `Investigate this finding and show me the evidence: “${el.dataset.text}”` }));
       else if (k === "fd:fix") el.addEventListener("click", () => send({ type: "user_message", text: `Propose a concrete fix for this finding: “${el.dataset.text}”` }));
       else if (k === "fd:resolve") el.addEventListener("click", () => {

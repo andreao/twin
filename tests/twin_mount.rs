@@ -471,10 +471,20 @@ fn agent_page_shows_agenda_and_activity_tidily() {
     g.twin_agent_tool(r#"{"tool":"work","args":{"task":"profile","text":"profiling turbines: ranges look sane"}}"#);
     g.twin_event(r#"{"type":"open_agent","panel":0}"#);
     let d = g.twin_from(0);
-    assert!(d.contains("Agenda — 2 open"), "no agenda section: {d}");
-    assert!(d.contains("Profile the turbines") && d.contains("Chart the hottest sensor"), "agenda items missing");
-    assert!(d.contains("ag-row active"), "active item not marked");
-    assert!(d.contains("Recent activity") && d.contains("ranges look sane"), "activity log missing");
+    assert!(d.contains("the plan"), "no plan section: {d}");
+    assert!(d.contains("task:1") && d.contains("task:2"), "task rows are not clickable things");
+    assert!(d.contains(r#""text":"now""#), "active task not labelled now");
+    assert!(d.contains("recently") && d.contains("ranges look sane"), "activity log missing");
+
+    // a task is a THING: it opens to its own page with status, work-so-far, actions
+    g.twin_event(r#"{"type":"open_task","id":1,"panel":1}"#);
+    let t = g.twin_from(0);
+    assert!(t.contains("task-active") && t.contains("in progress"), "no status chip: {t}");
+    assert!(t.contains("work so far") && t.contains("ranges look sane"), "task-scoped activity missing");
+    assert!(t.contains("ta:work") && t.contains("ta:done"), "task actions missing");
+    // marking done is an event; the fold updates everywhere
+    g.twin_event(r#"{"type":"set_task","id":1,"status":"done"}"#);
+    assert!(g.twin_perceive().contains("\"agendaDone\":1"), "done not folded");
 }
 
 #[test]
