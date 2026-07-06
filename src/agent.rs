@@ -125,8 +125,16 @@ fn drain(wake_rx: &Receiver<Wake>, mut w: Wake) -> Wake {
 fn agent_loop(tx: Sender<Cmd>, wake_rx: Receiver<Wake>) {
     let model = std::env::var("TWIN_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
     // The agent itself opens the conversation — a real model turn (with the thinking
-    // indicator), not a canned string, so it's clearly the agent talking.
-    run_turn(&tx, &model, Mode::Foreground, &wake_rx);
+    // indicator), not a canned string, so it's clearly the agent talking.  But a
+    // REMEMBERED twin (journal replayed into a non-empty feed) is a conversation in
+    // progress: don't greet again, just get back to work.
+    let fresh = serde_json::from_str::<serde_json::Value>(&perceive(&tx))
+        .ok()
+        .and_then(|v| v["feed"].as_array().map(|a| a.is_empty()))
+        .unwrap_or(true);
+    if fresh {
+        run_turn(&tx, &model, Mode::Foreground, &wake_rx);
+    }
     let mut idle = BG_FIRST_IDLE;
     loop {
         match wake_rx.recv_timeout(idle) {

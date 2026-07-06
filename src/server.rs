@@ -44,6 +44,36 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// The twin's persistent memory (§8): every event that DRIVES the graph — raw user
+/// events (already boundary-stamped) and agent tool calls — appended as JSONL.  On
+/// boot the journal replays through the exact same code paths, so the entire twin
+/// (chat, lenses, findings, agenda, stars, open columns) reconstructs from its own
+/// history.  Mounts/skills are not journaled: they re-derive from manifest + skills
+/// dir each boot, then history replays on top.  Delete the file for a fresh twin.
+const JOURNAL: &str = "data/journal.jsonl";
+
+fn journal_append(file: &mut Option<std::fs::File>, kind: &str, payload: &str) {
+    if let Some(f) = file {
+        let line = serde_json::json!({ "k": kind, "p": payload }).to_string();
+        let _ = writeln!(f, "{line}");
+    }
+}
+
+/// Apply one inbound event to the graph: raw capture (+ its boundary effect, for
+/// fetches).  Shared by the live path and the boot replay.
+fn apply_event(g: &mut JsGraph, stamped_json: &str) {
+    g.twin_event(stamped_json);
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(stamped_json) {
+        if v["type"] == "fetch" {
+            let adapter = v["adapter"].as_str().unwrap_or("");
+            let id = v["id"].as_str().unwrap_or("");
+            let label = v["label"].as_str().unwrap_or(id);
+            let panel = v["panel"].as_u64().unwrap_or(0) as usize;
+            g.twin_fetch(adapter, id, label, panel);
+        }
+    }
+}
+
 /// Start the server (blocking). `addr` like "127.0.0.1:8080".
 pub fn serve(addr: &str) -> std::io::Result<()> {
     let (tx, rx) = mpsc::channel::<Cmd>();
@@ -119,6 +149,28 @@ fn graph_loop(rx: Receiver<Cmd>, wake: Sender<agent::Wake>) {
         }
     }
 
+    // Replay the journal: the twin REMEMBERS.  Same code paths as live traffic, so
+    // the replay is exact; no clients are connected yet, so nothing is broadcast.
+    let mut replayed = 0usize;
+    if let Ok(text) = std::fs::read_to_string(JOURNAL) {
+        for line in text.lines() {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+            match (v["k"].as_str(), v["p"].as_str()) {
+                (Some("ev"), Some(p)) => { apply_event(&mut g, p); replayed += 1; }
+                (Some("tool"), Some(p)) => { dispatch_tool(&mut g, p); replayed += 1; }
+                _ => {}
+            }
+        }
+    }
+    if replayed > 0 {
+        println!("replayed {replayed} journal events — the twin remembers");
+    }
+    let mut journal = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(JOURNAL)
+        .ok();
+
     let mut clients: Vec<Sender<String>> = Vec::new();
     // invariant: `cursor` == total mutations already broadcast to all live clients.
     let mut cursor = g.twin_total();
@@ -144,21 +196,12 @@ fn graph_loop(rx: Receiver<Cmd>, wake: Sender<agent::Wake>) {
                     .to_string();
                 if let Some(v) = ev.as_mut() {
                     // EVERY user action is captured in its rawest form (§8 pure event
-                    // sourcing): stamp arrival time at the boundary and record the event
-                    // verbatim in the graph's `input` stream; feed items, renders, and the
-                    // agent's read of the user are all derived from it, with lineage.
+                    // sourcing): stamp arrival time at the boundary, apply it (raw capture
+                    // + derivations + any boundary fetch), and journal it for replay.
                     v["ts"] = serde_json::json!(now_ms());
-                    g.twin_event(&v.to_string());
-                    // a boundary fetch (§9.9) additionally invokes a named host capability
-                    // by (adapter, id).  The core routes by adapter key only; it doesn't
-                    // know the domain (here: a time-series lens materialized on demand).
-                    if etype == "fetch" {
-                        let adapter = v["adapter"].as_str().unwrap_or("");
-                        let id = v["id"].as_str().unwrap_or("");
-                        let label = v["label"].as_str().unwrap_or(id);
-                        let panel = v["panel"].as_u64().unwrap_or(0) as usize;
-                        g.twin_fetch(adapter, id, label, panel);
-                    }
+                    let stamped = v.to_string();
+                    apply_event(&mut g, &stamped);
+                    journal_append(&mut journal, "ev", &stamped);
                 }
                 broadcast_new(&mut g, &mut cursor, &mut clients);
                 // wake the agent when the user addressed it (typed or answered a card);
@@ -169,6 +212,7 @@ fn graph_loop(rx: Receiver<Cmd>, wake: Sender<agent::Wake>) {
             }
             Cmd::AgentTool(json) => {
                 dispatch_tool(&mut g, &json);
+                journal_append(&mut journal, "tool", &json);
                 broadcast_new(&mut g, &mut cursor, &mut clients);
             }
             Cmd::Perceive(reply) => {
