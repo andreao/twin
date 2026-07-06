@@ -97,6 +97,7 @@
 
   .working { max-width: 760px; margin: 0 auto; width: 100%; padding: 4px 24px 8px; height: 22px; color: var(--muted); font-size: 13px; display: none; align-items: center; gap: 8px; }
   .working.on { display: flex; }
+  #working-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--accent-soft); border-top-color: var(--accent); animation: spin .7s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -327,16 +328,26 @@
   }
 
   let ws;
+  let freshSnapshot = false; // the first batch after (re)connect = full history replay
   function connect() {
     ws = new WebSocket(`ws://${location.host}/ws`);
-    ws.onopen = () => { resetDom(); statusEl.classList.add("live"); statusText.textContent = "live"; };
+    ws.onopen = () => { resetDom(); freshSnapshot = true; statusEl.classList.add("live"); statusText.textContent = "live"; };
     ws.onclose = () => {
       statusEl.classList.remove("live"); statusText.textContent = "reconnecting…";
       setTimeout(connect, 1000);
     };
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data);
-      if (msg.type === "mutations") { msg.batch.forEach(applyMutation); autoscroll(); }
+      if (msg.type === "mutations") {
+        msg.batch.forEach(applyMutation);
+        if (freshSnapshot) {
+          // land at NOW — the bottom of the time axis — not at the beginning
+          feedwrap.scrollTop = feedwrap.scrollHeight;
+          freshSnapshot = false;
+        } else {
+          autoscroll();
+        }
+      }
       else if (msg.type === "status") {
         // the in-feed working line runs for BOTH kinds of turns, so it's always
         // visible in the chat that something is being worked on right now
@@ -367,8 +378,7 @@
     }
     appEl.classList.toggle("split", panels.length > 0);
   }
-  function openPanel(i, title, ev) {
-    removeTopPanels(i);
+  function mkPanel(i, title, ev) {
     const el = document.createElement("div");
     el.className = "panel";
     const head = document.createElement("div");
@@ -376,11 +386,12 @@
     const t = document.createElement("div");
     t.className = "panel-title";
     t.textContent = title || "";
+    const p = { title: title || "", ev: ev || null, el, tEl: t, bodyEl: null, isBoard: false };
     const star = document.createElement("button");
     star.className = "panel-btn";
     star.title = "Star this page";
     star.textContent = "☆";
-    star.addEventListener("click", () => { star.textContent = star.textContent === "☆" ? "★" : "☆"; send({ type: "star", title: title || "page", target: ev }); });
+    star.addEventListener("click", () => { if (!p.ev) return; star.textContent = star.textContent === "☆" ? "★" : "☆"; send({ type: "star", title: p.title || "page", target: p.ev }); });
     const close = document.createElement("button");
     close.className = "panel-btn";
     close.title = "Close";
@@ -390,15 +401,34 @@
     head.append(t, star, close);
     const body = document.createElement("div");
     body.className = "panel-body";
+    p.bodyEl = body;
     el.append(head, body);
     makeResizable(el, "panel-rz");
-    const isBoard = ev && ev.type === "open_board";
-    if (isBoard) body.appendChild(boardRoot);
-    else nodes.set(`panel:${i}:body`, body);
-    panels.push({ title, ev, el, isBoard });
+    nodes.set(`panel:${i}:body`, body);
+    if (ev && ev.type === "open_board") { p.isBoard = true; body.appendChild(boardRoot); }
+    panels.push(p);
     stackEl.appendChild(el);
     appEl.classList.add("split");
     stackEl.scrollLeft = stackEl.scrollWidth;
+    return p;
+  }
+  function openPanel(i, title, ev) {
+    removeTopPanels(i);
+    mkPanel(i, title, ev);
+  }
+  // A replaying snapshot references panel bodies before any chrome exists: rebuild
+  // the columns from the log's own markers (data-title / data-ev on each body).
+  function restorePanel(i) {
+    while (panels.length <= i) mkPanel(panels.length, "", null);
+  }
+  function syncPanel(i, name, value) {
+    const p = panels[i];
+    if (!p || !value) return;
+    if (name === "data-title") { p.title = value; p.tEl.textContent = value; }
+    else if (name === "data-ev") {
+      try { p.ev = JSON.parse(value); } catch (_) { return; }
+      if (p.ev && p.ev.type === "open_board" && !p.isBoard) { p.isBoard = true; p.bodyEl.appendChild(boardRoot); }
+    }
   }
   // open anything: create the column, then ask the graph to render into it.
   // (open_board is hosted client-side, but the event is still sent so the user's
@@ -467,7 +497,14 @@
       }
       case "move": { const el = nodes.get(m.key), p = nodes.get(m.parent); if (el && p) insertAt(p, el, m.index); break; }
       case "setText": { const el = nodes.get(m.key); if (el && document.activeElement !== el) el.textContent = m.text; break; }
-      case "setAttr": { const el = nodes.get(m.key); if (el) { if (m.value == null) el.removeAttribute(m.name); else el.setAttribute(m.name, m.value); } break; }
+      case "setAttr": {
+        const pb = /^panel:(\d+):body$/.exec(m.key);
+        if (pb) restorePanel(Number(pb[1]));
+        const el = nodes.get(m.key);
+        if (el) { if (m.value == null) el.removeAttribute(m.name); else el.setAttribute(m.name, m.value); }
+        if (pb) syncPanel(Number(pb[1]), m.name, m.value);
+        break;
+      }
       case "setProp": { const el = nodes.get(m.key); if (el) el[m.name] = m.value; break; }
       case "remove": { const el = nodes.get(m.key); if (el) el.remove(); nodes.delete(m.key); break; }
       case "listen": {

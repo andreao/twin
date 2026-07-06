@@ -352,6 +352,21 @@ fn agent_authors_a_lens_with_lineage() {
 }
 
 #[test]
+fn empty_lenses_are_rejected_not_rendered() {
+    let path = write_temp_csv();
+    let mut g = JsGraph::new_twin();
+    g.twin_read_source("turbines", &path, "mounted");
+    g.twin_agent_tool(
+        r#"{"tool":"make_lens","args":{"name":"Nothing here","description":"Filters to a temp no turbine reaches.","source":"turbines","code":"return rows.filter(r => Number(r.gearbox_temp) > 9000)"}}"#,
+    );
+    let muts = g.twin_from(0);
+    assert!(!muts.contains("ln:nothing-here"), "0-row lens landed on the board");
+    assert!(!muts.contains("0 rows derived"), "0-row card landed in the chat");
+    assert!(muts.contains("EMPTY (0 rows)"), "agent not told the lens was empty");
+    assert!(!g.twin_perceive().contains("lens:nothing-here"), "empty lens perceived as real");
+}
+
+#[test]
 fn lenses_compose_and_the_chain_is_shown() {
     let path = write_temp_csv();
     let mut g = JsGraph::new_twin();
@@ -429,6 +444,9 @@ fn detail_stack_panels_are_independent_columns() {
     let muts = g.twin_from(0);
     assert!(muts.contains("p0:exp:tbl"), "no table in column 0: {muts}");
     assert!(muts.contains("p1:exp:note"), "no search in column 1");
+    // each column is stamped with what it shows, so a replaying client can rebuild
+    // the panel chrome from the log — open columns survive reloads
+    assert!(muts.contains(r#""key":"panel:0:body","name":"data-title""#), "no restore marker on column 0: {muts}");
     // re-opening at column 0 invalidates column 1 (everything to the right)
     let before = g.twin_total();
     g.twin_event(r#"{"type":"open_source","name":"turbines","panel":0}"#);

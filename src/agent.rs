@@ -180,6 +180,7 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
     let mut stuck = 0;
     let mut idle_overridden = false;
     let mut idle_item: Option<String> = None;
+    let mut lens_notes: Vec<String> = Vec::new();
     for _ in 0..MAX_STEPS {
         if background {
             if let Ok(w) = wake.try_recv() {
@@ -272,11 +273,31 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
         }
         eprintln!("[agent{}] {name}: {}", if background { "·bg" } else { "" }, preview(&tool));
         emit(tx, &tool);
+        // remember what got built, so the turn can never leave a bare lens card
+        // in the chat with no explanation (the narration backstop below).
+        if name == "make_lens" {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&tool) {
+                let n = v["args"]["name"].as_str().unwrap_or("a new lens");
+                let d = v["args"]["description"].as_str().unwrap_or("");
+                lens_notes.push(if d.is_empty() {
+                    format!("“{n}”")
+                } else {
+                    format!("“{n}” — {}", d.trim_end_matches('.'))
+                });
+            }
+        }
         // A turn ends when the agent addresses the user.
         if name == "say" || name == "ask" {
             said = true;
             break;
         }
+    }
+    // Narration backstop: if the model built lenses but didn't explain itself, say
+    // it deterministically — in the agent's OWN words (its name + description args),
+    // so cards never appear in the conversation without motivation.
+    if !said && !preempted && !lens_notes.is_empty() {
+        emit(tx, &say_json(&format!("I added {} to the twin.", lens_notes.join("; and "))));
+        said = true;
     }
     // A FOREGROUND turn must never end with NOTHING — but if it already produced
     // visible work (cards, views, lenses), a canned "what next?" line is just jank.

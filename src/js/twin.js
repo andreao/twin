@@ -225,7 +225,7 @@ const T = (() => {
   const panelKeys = new Map(); // panel index -> keys rendered into it
   const fmtNum = (n) => (Math.abs(n) >= 1000 || Number.isInteger(n)) ? n.toFixed(0) : Number(n.toPrecision(4)).toString();
 
-  function viewer(panel) {
+  function viewer(panel, title, ev) {
     const p = Number(panel) || 0;
     // opening at p invalidates p and every column to its right
     for (const [pi, ks] of [...panelKeys]) {
@@ -237,6 +237,11 @@ const T = (() => {
     const fresh = [];
     panelKeys.set(p, fresh);
     const root = `panel:${p}:body`;
+    // stamp the column with what it shows: a replaying client rebuilds the panel
+    // chrome (title, star target) from these marks — open columns survive reloads
+    // because the UI state IS in the log, not in the browser.
+    TWIN_MUT.push({ op: 'setAttr', key: root, name: 'data-title', value: String(title || '') });
+    if (ev) TWIN_MUT.push({ op: 'setAttr', key: root, name: 'data-ev', value: JSON.stringify(ev) });
     const K = (k) => `p${p}:${k}`;
     return {
       panel: p,
@@ -251,10 +256,10 @@ const T = (() => {
     };
   }
 
-  function openSource(name, mode, panel) {
+  function openSource(name, mode, panel, title) {
     const s = sources.get(name);
     if (!s) return;
-    const V = viewer(panel);
+    const V = viewer(panel, title || srcTitle(name), { type: 'open_source', name, mode: mode || '' });
     if (s.kind === 'documents') return renderDocuments(V, s);
     if (mode === 'tree' && name === 'assets') return renderTree(V, name, s);
     if (mode === 'timeline' && name === 'events') return renderTimeline(V, name, s);
@@ -381,14 +386,14 @@ const T = (() => {
   }
 
   function chartMessage(label, msg, panel) {
-    const V = viewer(panel);
+    const V = viewer(panel, String(label || ''), null);
     V.add('div', 'exp:note', null, 0); V.set('exp:note', 'class', 'explorer-note');
     V.text('exp:note', `${label} — ${msg}.`);
   }
 
   // chart lens: raw datapoints (from Rust, downsampled) → an SVG line chart.
   function chartSeries(id, label, points, provenance, panel) {
-    const V = viewer(panel);
+    const V = viewer(panel, String(label || id), { type: 'fetch', adapter: 'cognite-datapoints', id: String(id), label: String(label || id) });
     if (!points || !points.length) {
       V.add('div', 'exp:note', null, 0); V.set('exp:note', 'class', 'explorer-note');
       V.text('exp:note', `${label} — no datapoints.`);
@@ -416,11 +421,11 @@ const T = (() => {
   // events (assetIds) so a click on a compressor shows its sensors + maintenance.
   const fmtDate = (ms) => { const t = Number(ms); if (!t) return ''; const d = new Date(t); return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`; };
   function rowsOf(name) { const id = sourceIds.get(name); return id === undefined ? [] : G.stateOf(id).support().map((r) => r.asObject()); }
-  function openAsset(assetId, panel) {
+  function openAsset(assetId, panel, title) {
     const aid = String(assetId);
     const asset = rowsOf('assets').find((r) => String(r.id) === aid);
     if (!asset) return;
-    const V = viewer(panel);
+    const V = viewer(panel, title || asset.name || `asset ${aid}`, { type: 'open_asset', id: aid });
     const sensors = rowsOf('timeseries').filter((r) => String(r.assetId) === aid);
     const events = rowsOf('events')
       .filter((r) => String(r.assetIds || '').split(';').includes(aid))
@@ -471,7 +476,7 @@ const T = (() => {
   // action keys (tn:/sens:/doc:) so results are click-through to their views.
   function search(query, panel) {
     const q = String(query || '').trim().toLowerCase();
-    const V = viewer(panel);
+    const V = viewer(panel, 'Search', { type: 'search', query: String(query || '') });
     V.add('div', 'exp:note', null, 0); V.set('exp:note', 'class', 'explorer-note');
     if (!q) { V.text('exp:note', 'Search assets, sensors, events, and documents…'); return; }
     const m = (v) => v != null && String(v).toLowerCase().includes(q);
@@ -500,7 +505,7 @@ const T = (() => {
   // Watch (§12.4) — the twin watching itself: derived issues from the asset ↔ sensor
   // ↔ event links, surfaced as a queue you browse and click through to the asset.
   function watch(panel) {
-    const V = viewer(panel);
+    const V = viewer(panel, 'Watch', { type: 'watch' });
     const assets = rowsOf('assets'); const byId = new Map(assets.map((a) => [String(a.id), a]));
     const eByA = new Map(); rowsOf('events').forEach((e) => String(e.assetIds || '').split(';').forEach((a) => { if (a) eByA.set(a, (eByA.get(a) || 0) + 1); }));
     const sByA = new Map(); rowsOf('timeseries').forEach((t) => { const a = String(t.assetId); sByA.set(a, (sByA.get(a) || 0) + 1); });
@@ -545,7 +550,7 @@ const T = (() => {
     });
   }
   function openDocument(name, panel) {
-    const V = viewer(panel);
+    const V = viewer(panel, String(name), { type: 'open_document', name: String(name) });
     const ext = String(name).split('.').pop().toLowerCase();
     const src = '/file/' + encodeURIComponent(name);
     if (ext === 'pdf') { V.add('iframe', 'exp:doc', null, 0); V.set('exp:doc', 'src', src); V.set('exp:doc', 'class', 'doc-frame'); }
@@ -620,7 +625,7 @@ const T = (() => {
   // through the chat) or mark it resolved (an event, folded everywhere).
   function openFinding(id, panel) {
     const f = findings.get(Number(id));
-    const V = viewer(panel);
+    const V = viewer(panel, 'Finding', { type: 'open_finding', id: Number(id) });
     if (!f) {
       V.add('div', 'exp:note', null, 0); V.set('exp:note', 'class', 'explorer-note');
       V.text('exp:note', `No finding #${id}.`);
@@ -680,6 +685,12 @@ const T = (() => {
     try { out = new Function('rows', code)(G.stateOf(id).support().map((r) => r.asObject())); }
     catch (err) { logActivity(`lens “${title}” failed: ${err.message}`); return; }
     if (!Array.isArray(out)) { logActivity(`lens “${title}”: code must return an array of rows`); return; }
+    if (!out.length) {
+      // an empty lens is clutter, not insight — bounce it back to the agent instead
+      // of landing a "0 rows" card in the chat and a dead tile on the board.
+      logActivity(`lens “${title}” came back EMPTY (0 rows) — not added. Check the code (field names? types?) or drop the idea.`);
+      return;
+    }
     out = out.slice(0, 5000).map((r) => (r && typeof r === 'object' ? r : { value: r }));
     const lname = 'lens:' + name;
     // re-authoring the same name = a NEW version; old versions stay in the event log
@@ -741,9 +752,10 @@ const T = (() => {
     const cols = Object.keys((sources.get(src) || {}).schema || {});
     const stats = [];
     cols.forEach((c) => {
+      if (/id$/i.test(c)) return; // identifiers are labels, not measurements
       const nums = rows.map((r) => Number(r[c])).filter((n) => Number.isFinite(n));
       if (nums.length > rows.length * 0.5 && nums.length) {
-        stats.push(`${c} ${Math.min(...nums).toFixed(1)}–${Math.max(...nums).toFixed(1)}`);
+        stats.push(`${c} ${fmtNum(Math.min(...nums))}–${fmtNum(Math.max(...nums))}`);
       }
     });
     const issues = [];
@@ -965,11 +977,15 @@ const T = (() => {
       const opt = q && q.options ? q.options[idx] : null;
       append('user', { text: opt != null ? String(opt) : `option ${idx + 1}` }, note);
     } else if (e.type === 'open_source' && e.name) {
-      openSource(String(e.name), e.mode, e.panel);
+      openSource(String(e.name), e.mode, e.panel, e.title);
     } else if (e.type === 'open_document' && e.name) {
       openDocument(String(e.name), e.panel);
     } else if (e.type === 'open_asset' && e.id) {
-      openAsset(String(e.id), e.panel);
+      openAsset(String(e.id), e.panel, e.title);
+    } else if (e.type === 'open_board') {
+      // the board is hosted client-side; the marker alone lets a replaying client
+      // rebuild the column (and clears anything to its right, like every open)
+      viewer(e.panel, e.title || 'The twin', { type: 'open_board' });
     } else if (e.type === 'search') {
       search(String(e.query || ''), e.panel);
     } else if (e.type === 'watch') {
