@@ -33,10 +33,12 @@ fn mounting_a_file_appears_in_perception_and_renders() {
     assert!(seen.contains("WT-01"), "perceive missing sample rows: {seen}");
     assert!(seen.contains("\"rowcount\":3"), "perceive missing rowcount: {seen}");
 
-    // (2) it renders: a Sources-panel row + a "Mounted …" system feed item (§11.3)
+    // (2) it renders: a board tile + a "Mounted …" ACTION CARD in the chat (the
+    // history reads as work that was done, openable like any card)
     let muts = g.twin_from(0);
-    assert!(muts.contains("sr:turbines"), "no source row rendered: {muts}");
-    assert!(muts.contains("Mounted"), "no system feed note: {muts}");
+    assert!(muts.contains("sr:turbines"), "no source tile rendered: {muts}");
+    assert!(muts.contains("Mounted turbines"), "no mount card in the chat: {muts}");
+    assert!(muts.contains("card-title openable"), "mount card is not openable");
 
     // (3) the file is untouched — federation, not export
     assert!(std::fs::metadata(&path).is_ok(), "source file must remain");
@@ -300,6 +302,7 @@ fn agent_records_findings_on_the_board() {
     assert!(muts.contains("Findings — 1"), "tile title has no count");
     assert!(muts.contains("fnd:1") && muts.contains("sev-warn"), "finding card missing: {muts}");
     assert!(muts.contains("no vibration sensor"), "finding text missing");
+    assert!(muts.contains("Data issue"), "finding not surfaced as a chat card");
     // filing the same finding twice is a no-op
     g.twin_agent_tool(r#"{"tool":"finding","args":{"severity":"warn","text":"3 turbines have no vibration sensor"}}"#);
     assert!(!g.twin_from(0).contains("fnd:2"), "duplicate finding filed twice");

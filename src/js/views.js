@@ -25,9 +25,20 @@ class Feed {
     this.items.push(item);
     const key = `item:${item.seq}`;
     this._emit({ op: 'create', key, tag: 'div', parent: this.root, index: idx });
-    this._emit({ op: 'setAttr', key, name: 'class', value: `feed-item ${item.kind}` });
+    this._emit({ op: 'setAttr', key, name: 'class', value: `feed-item ${item.kind}${item.tone ? ' ' + item.tone : ''}` });
 
-    if (item.kind === 'view') {
+    if (item.kind === 'card') {
+      // a compact action card: work the agent (or the system) DID, as chat history —
+      // title (openable when it points somewhere) + one quiet detail line.
+      const hk = `${key}:h`;
+      this._emit({ op: 'create', key: hk, tag: 'div', parent: key, index: 0 });
+      this._emit({ op: 'setAttr', key: hk, name: 'class', value: 'card-title' });
+      this._emit({ op: 'setText', key: hk, text: item.text || '' });
+      const dk = `${key}:d`;
+      this._emit({ op: 'create', key: dk, tag: 'div', parent: key, index: 1 });
+      this._emit({ op: 'setAttr', key: dk, name: 'class', value: 'card-sub' });
+      this._emit({ op: 'setText', key: dk, text: item.sub || '' });
+    } else if (item.kind === 'view') {
       // a rich view the agent renders into the conversation: a titled card with an
       // empty body the app fills with a table / hierarchy / document lens (§11.16).
       const hk = `${key}:h`;
