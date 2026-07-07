@@ -224,8 +224,31 @@ fn apply_event(g: &mut JsGraph, stamped_json: &str) {
     }
 }
 
+/// Materialize seeded projects (data/seeds/<slug>/) into data/projects/ where
+/// they don't exist yet.  A seed is a starting JOURNAL — the repo ships it, the
+/// twin lives its own life on the copy, and deleting the project directory
+/// resets it to the seed on the next boot.
+fn seed_projects() {
+    let Ok(rd) = std::fs::read_dir("data/seeds") else { return };
+    for e in rd.flatten() {
+        let Some(slug) = e.file_name().to_str().map(String::from) else { continue };
+        let dest = format!("data/projects/{slug}");
+        if std::path::Path::new(&dest).exists() {
+            continue;
+        }
+        if std::fs::create_dir_all(&dest).is_err() {
+            continue;
+        }
+        for f in ["journal.jsonl", "project.json"] {
+            let _ = std::fs::copy(e.path().join(f), format!("{dest}/{f}"));
+        }
+        println!("seeded project {slug} from data/seeds/{slug}");
+    }
+}
+
 /// Start the server (blocking). `addr` like "127.0.0.1:8080".
 pub fn serve(addr: &str) -> std::io::Result<()> {
+    seed_projects();
     let projects: Projects = Arc::new(Mutex::new(HashMap::new()));
     // the default project boots eagerly (it's the one with the demo mounts);
     // every other project boots on the first client that asks for it

@@ -20,6 +20,8 @@
 /tauri/gen/schemas/
 serve.log
 
-# the showcase ships with the repo: generated demo data + its seeded project
+# the showcase ships with the repo: generated demo data + a project SEED.
+# (data/projects/* stays runtime state — the server materializes any missing
+# project from data/seeds/ on boot, so the living journal never dirties git.)
 !/data/showcase/
-!/data/projects/showcase/
+!/data/seeds/
