@@ -702,11 +702,13 @@ const T = (() => {
     const modes = [['table', 'Table']];
     if (name === 'assets') modes.push(['tree', 'Hierarchy']);
     if (name === 'events') modes.push(['timeline', 'Timeline']);
-    if (dateFieldOf(rows)) modes.push(['calendar', 'Calendar']);
+    if (dateFieldOf(rows)) { modes.push(['calendar', 'Calendar']); modes.push(['heatmap', 'Heatmap']); }
     if (laneFieldOf(rows)) modes.push(['kanban', 'Board']);
+    if (spanFieldsOf(rows)) modes.push(['gantt', 'Gantt']);
     const nums = numericFieldsOf(rows);
     if (nums.length >= 1) modes.push(['histogram', 'Histogram']);
     if (nums.length >= 2) modes.push(['scatter', 'Scatter']);
+    if (nums.length >= 3) modes.push(['3d', '3D']);
     if (geoFieldsOf(rows)) modes.push(['map', 'Map']);
     if (proseFieldOf(rows)) modes.push(['reading', 'Reading']);
     if (depthFieldOf(rows)) modes.push(['depth', 'Depth log']);
@@ -846,6 +848,10 @@ const T = (() => {
   function purgeLivePanels(from) {
     for (const p of [...liveTables.keys()]) if (p >= from) liveTables.delete(p);
     for (const p of [...liveViews.keys()]) if (p >= from) liveViews.delete(p);
+    for (const k of [...orbits.keys()]) {
+      const m = /^p(\d+)s?:/.exec(k);
+      if (m && Number(m[1]) >= Math.floor(from)) orbits.delete(k);
+    }
   }
 
   function renderTable(V, name, s) {
@@ -1133,6 +1139,11 @@ const T = (() => {
     scatter: 'scatter',
     map: 'map', geo: 'map',
     reading: 'reading',
+    metric: 'metric', kpi: 'metric', number: 'metric',
+    donut: 'donut', pie: 'donut',
+    heatmap: 'heatmap',
+    gantt: 'gantt', spans: 'gantt', schedule: 'gantt',
+    '3d': '3d', scatter3d: '3d', cloud: '3d', trajectory: '3d',
   };
 
   // one embedded view inside rendered markdown: parse the block's JSON, resolve
@@ -1421,6 +1432,295 @@ const T = (() => {
     b.add('text', 'x1', 'svg', n + 3); b.set('x1', 'x', W - pad); b.set('x1', 'y', H - pad + 16); b.set('x1', 'class', 'chart-xlbl endlbl'); b.text('x1', fmtNum(xmax));
   }
 
+  // ---- the muted palette every multi-series view draws from (lanes, groups,
+  // donut slices): the accent first, then warm earth tones — never neon.
+  const PALETTE = ['#c96442', '#4a6f8a', '#3f6b48', '#8a5a14', '#7a4a38', '#9b8452', '#8a8078', '#5c5850'];
+
+  // ---- metric: ONE number, computed over all rows — the dashboard's pulse.
+  function renderMetricInto(root, pfx, name, opts) {
+    const rows = rowsOf(name);
+    const b = vbuild(root, pfx);
+    const agg = String((opts && opts.agg) || 'count').toLowerCase();
+    const field = resolveField(name, opts && opts.field, rows.slice(0, SAMPLE_N));
+    let value = rows.length;
+    if (agg !== 'count' && field) {
+      const vals = rows.map((r) => r[field]).filter((v) => typeof v === 'number');
+      if (vals.length) {
+        value = agg === 'sum' ? vals.reduce((a, v) => a + v, 0)
+          : agg === 'avg' ? vals.reduce((a, v) => a + v, 0) / vals.length
+          : agg === 'min' ? Math.min(...vals)
+          : agg === 'max' ? Math.max(...vals) : vals.length;
+      } else { value = null; }
+    }
+    b.add('div', 'm', null, 0); b.set('m', 'class', 'metric');
+    b.add('div', 'mv', 'm', 0); b.set('mv', 'class', 'metric-v');
+    const big = value != null && Math.abs(value) >= 1000;
+    b.text('mv', value == null ? '–' : (agg === 'count' || big ? fmtInt(Math.round(value)) : fmtNum(value)));
+    b.add('div', 'ml', 'm', 1); b.set('ml', 'class', 'metric-l');
+    b.text('ml', (opts && opts.label) || `${agg === 'count' ? 'rows' : `${agg} of ${fieldTitle(name, field)}`} · ${srcTitle(name)}`);
+  }
+
+  // ---- donut: an enum's proportions as arcs, the counts as a legend.
+  function renderDonutInto(root, pfx, name, opts) {
+    const rows = rowsOf(name);
+    const sample = rows.slice(0, SAMPLE_N);
+    const field = resolveField(name, opts && opts.field, sample) || laneFieldOf(sample);
+    const b = vbuild(root, pfx);
+    b.add('div', 'note', null, 0); b.set('note', 'class', 'explorer-note');
+    if (!field) { b.text('note', 'a donut needs a column with a handful of values'); return; }
+    const counts = new Map();
+    for (const r of rows) { const v = r[field] == null || r[field] === '' ? '(empty)' : String(r[field]); counts.set(v, (counts.get(v) || 0) + 1); }
+    let slices = [...counts.entries()].sort((a, c) => c[1] - a[1]);
+    if (slices.length > 7) {
+      const rest = slices.slice(7).reduce((a, s) => a + s[1], 0);
+      slices = slices.slice(0, 7).concat([[`${counts.size - 7} others`, rest]]);
+    }
+    const total = rows.length || 1;
+    b.text('note', `${fmtInt(rows.length)} rows by ${fieldTitle(name, field)}`);
+    b.add('div', 'wrap', null, 1); b.set('wrap', 'class', 'donut-wrap');
+    const W = 240, R = 88, C = W / 2;
+    b.add('svg', 'svg', 'wrap', 0); b.set('svg', 'viewBox', `0 0 ${W} ${W}`); b.set('svg', 'class', 'donut');
+    let a0 = -Math.PI / 2;
+    slices.forEach(([label, n], si) => {
+      const a1 = a0 + (n / total) * 2 * Math.PI;
+      const large = a1 - a0 > Math.PI ? 1 : 0;
+      const p = (a) => `${(C + R * Math.cos(a)).toFixed(1)} ${(C + R * Math.sin(a)).toFixed(1)}`;
+      const k = `s${si}`;
+      b.add('path', k, 'svg', si);
+      b.set(k, 'd', `M ${p(a0)} A ${R} ${R} 0 ${large} 1 ${p(Math.min(a1, a0 + 2 * Math.PI - 0.0001))}`);
+      b.set(k, 'fill', 'none'); b.set(k, 'stroke', PALETTE[si % PALETTE.length]);
+      b.set(k, 'stroke-width', 34); b.set(k, 'title', `${label}: ${n}`);
+      a0 = a1;
+    });
+    b.add('div', 'leg', 'wrap', 1); b.set('leg', 'class', 'donut-leg');
+    slices.forEach(([label, n], si) => {
+      const k = `l${si}`;
+      b.add('div', k, 'leg', si); b.set(k, 'class', 'donut-li');
+      b.add('span', `${k}d`, k, 0); b.set(`${k}d`, 'class', 'donut-dot'); b.set(`${k}d`, 'style', `background:${PALETTE[si % PALETTE.length]}`);
+      b.add('span', `${k}t`, k, 1); b.text(`${k}t`, `${label} · ${fmtInt(n)} · ${Math.round((n / total) * 100)}%`);
+    });
+  }
+
+  // ---- heatmap: counts over a grid.  With a date field: hour of day × weekday
+  // (the "when does work happen" picture); else two small enums against each other.
+  function renderHeatmapInto(root, pfx, name, opts) {
+    const rows = rowsOf(name);
+    const sample = rows.slice(0, SAMPLE_N);
+    const b = vbuild(root, pfx);
+    b.add('div', 'note', null, 0); b.set('note', 'class', 'explorer-note');
+    const fx = resolveField(name, opts && opts.x, sample);
+    const fy = resolveField(name, opts && opts.y, sample);
+    const dateF = dateFieldOf(sample);
+    let xs, ys, keyOf, label;
+    if ((!fx || !fy) && dateF) {
+      xs = [...Array(24).keys()].map(String);
+      ys = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+      keyOf = (r) => {
+        const t = asWhen(r[dateF]);
+        if (t == null) return null;
+        const d = new Date(t);
+        return [String(d.getUTCHours()), ys[(d.getUTCDay() + 6) % 7]];
+      };
+      label = `hour of day × weekday · by ${fieldTitle(name, dateF)}`;
+    } else if (fx && fy) {
+      const vals = (f) => [...new Set(rows.map((r) => (r[f] == null || r[f] === '' ? '(empty)' : String(r[f]))))].slice(0, 20);
+      xs = vals(fx); ys = vals(fy);
+      keyOf = (r) => [String(r[fx] == null ? '(empty)' : r[fx]), String(r[fy] == null ? '(empty)' : r[fy])];
+      label = `${fieldTitle(name, fx)} × ${fieldTitle(name, fy)}`;
+    } else {
+      b.text('note', 'a heatmap needs a date field, or an x and a y'); return;
+    }
+    const grid = new Map();
+    let n = 0;
+    for (const r of rows) {
+      const k = keyOf(r);
+      if (!k || !xs.includes(k[0]) || !ys.includes(k[1])) continue;
+      const gk = `${k[0]}|${k[1]}`;
+      grid.set(gk, (grid.get(gk) || 0) + 1);
+      n++;
+    }
+    const peak = Math.max(1, ...grid.values());
+    b.text('note', `${fmtInt(n)} rows · ${label} · darkest = ${fmtInt(peak)}`);
+    const cell = 34, padL = 52, padT = 8, padB = 26;
+    const W = padL + xs.length * cell + 8, H = padT + ys.length * cell + padB;
+    b.add('svg', 'svg', null, 1); b.set('svg', 'viewBox', `0 0 ${W} ${H}`); b.set('svg', 'class', 'chart heatmap');
+    let idx = 0;
+    ys.forEach((yv, yi) => {
+      b.add('text', `yl${yi}`, 'svg', idx++); b.set(`yl${yi}`, 'x', padL - 8); b.set(`yl${yi}`, 'y', padT + yi * cell + cell / 2 + 4);
+      b.set(`yl${yi}`, 'class', 'chart-lbl'); b.text(`yl${yi}`, String(yv).slice(0, 9));
+      xs.forEach((xv, xi) => {
+        const c = grid.get(`${xv}|${yv}`) || 0;
+        const k = `c${xi}_${yi}`;
+        b.add('rect', k, 'svg', idx++);
+        b.set(k, 'x', padL + xi * cell + 1); b.set(k, 'y', padT + yi * cell + 1);
+        b.set(k, 'width', cell - 2); b.set(k, 'height', cell - 2); b.set(k, 'rx', 4);
+        b.set(k, 'fill', c ? '#c96442' : '#f4f2ee'); b.set(k, 'fill-opacity', c ? (0.15 + 0.85 * (c / peak)).toFixed(2) : '1');
+        b.set(k, 'title', `${xv} × ${yv}: ${c}`);
+      });
+    });
+    xs.forEach((xv, xi) => {
+      if (xs.length > 12 && xi % 2) return;
+      b.add('text', `xl${xi}`, 'svg', idx++); b.set(`xl${xi}`, 'x', padL + xi * cell + cell / 2); b.set(`xl${xi}`, 'y', H - 8);
+      b.set(`xl${xi}`, 'class', 'chart-xlbl hm-x'); b.text(`xl${xi}`, String(xv).slice(0, 6));
+    });
+  }
+
+  // ---- gantt: rows that carry a start and an end, as spans along time —
+  // grouped rows, colored by the lane field when there is one.
+  function spanFieldsOf(rows) {
+    const fs = fieldsOf(rows);
+    const dateish = fs.filter((f) => rows.some((r) => asWhen(r[f]) != null));
+    if (dateish.length < 2) return null;
+    const start = dateish.find((f) => /start|begin|from|opened|created/i.test(f)) || dateish[0];
+    const end = dateish.find((f) => f !== start && /end|finish|to|until|closed|done/i.test(f)) || dateish.find((f) => f !== start);
+    if (!start || !end) return null;
+    const ok = rows.filter((r) => asWhen(r[start]) != null && asWhen(r[end]) != null);
+    return ok.length >= 3 && ok.every((r) => asWhen(r[end]) >= asWhen(r[start])) ? { start, end } : null;
+  }
+  function renderGanttInto(root, pfx, name, opts) {
+    const rows = rowsOf(name);
+    const sample = rows.slice(0, SAMPLE_N);
+    const span = (opts && opts.start && opts.end)
+      ? { start: resolveField(name, opts.start, sample), end: resolveField(name, opts.end, sample) }
+      : spanFieldsOf(sample);
+    const b = vbuild(root, pfx);
+    b.add('div', 'note', null, 0); b.set('note', 'class', 'explorer-note');
+    if (!span || !span.start || !span.end) { b.text('note', 'a gantt needs a start and an end field'); return; }
+    const titleF = titleFieldOf(sample, span.start);
+    const lane = laneFieldOf(sample);
+    let items = rows
+      .map((r) => ({ t: r[titleF], a: asWhen(r[span.start]), z: asWhen(r[span.end]), v: lane ? String(r[lane] ?? '') : '' }))
+      .filter((x) => x.a != null && x.z != null && x.z >= x.a)
+      .sort((p, q) => q.a - p.a);
+    const CAP = 36;
+    const shown = items.slice(0, CAP).reverse();
+    if (!shown.length) { b.text('note', 'no rows carry both ends of a span'); return; }
+    const laneVals = [...new Set(shown.map((x) => x.v))];
+    b.text('note', `${fmtInt(items.length)} spans · ${fieldTitle(name, span.start)} to ${fieldTitle(name, span.end)}`
+      + (items.length > CAP ? ` · latest ${CAP} shown` : '') + (lane ? ` · colored by ${fieldTitle(name, lane)}` : ''));
+    const tmin = Math.min(...shown.map((x) => x.a)), tmax = Math.max(...shown.map((x) => x.z));
+    const rowH = 22, padL = 180, padR = 16, padT = 6;
+    const W = 1000, H = padT + shown.length * rowH + 26;
+    const sx = (t) => padL + (tmax > tmin ? (t - tmin) / (tmax - tmin) : 0.5) * (W - padL - padR);
+    b.add('svg', 'svg', null, 1); b.set('svg', 'viewBox', `0 0 ${W} ${H}`); b.set('svg', 'class', 'chart');
+    let idx = 0;
+    shown.forEach((x, ri) => {
+      const y = padT + ri * rowH;
+      b.add('text', `t${ri}`, 'svg', idx++); b.set(`t${ri}`, 'x', padL - 10); b.set(`t${ri}`, 'y', y + rowH / 2 + 4);
+      b.set(`t${ri}`, 'class', 'chart-lbl'); b.text(`t${ri}`, String(x.t == null ? '' : x.t).slice(0, 26));
+      const k = `b${ri}`;
+      b.add('rect', k, 'svg', idx++);
+      b.set(k, 'x', sx(x.a).toFixed(1)); b.set(k, 'y', y + 4);
+      b.set(k, 'width', Math.max(2, sx(x.z) - sx(x.a)).toFixed(1)); b.set(k, 'height', rowH - 8); b.set(k, 'rx', 4);
+      b.set(k, 'fill', PALETTE[Math.max(0, laneVals.indexOf(x.v)) % PALETTE.length]); b.set(k, 'fill-opacity', '0.8');
+      b.set(k, 'title', `${x.t} · ${fmtDate(x.a)} to ${fmtDate(x.z)}${x.v ? ' · ' + x.v : ''}`);
+    });
+    b.add('text', 'd0', 'svg', idx++); b.set('d0', 'x', padL); b.set('d0', 'y', H - 8); b.set('d0', 'class', 'chart-xlbl'); b.text('d0', fmtDate(tmin));
+    b.add('text', 'd1', 'svg', idx++); b.set('d1', 'x', W - padR); b.set('d1', 'y', H - 8); b.set('d1', 'class', 'chart-xlbl endlbl'); b.text('d1', fmtDate(tmax));
+  }
+
+  // ---- 3d: three numeric axes as an orbitable point cloud (or connected
+  // trajectories with "connect": true), projected server-side onto SVG.  Each
+  // group is ONE path of dot segments, so a drag re-sets a few `d` attributes —
+  // the orbit event is view state, exactly like a table's viewport.
+  const orbits = new Map(); // svg key -> { yaw, pitch, redraw }
+  function axis3Of(rows) {
+    const nums = numericFieldsOf(rows);
+    const find = (res) => nums.find((f) => res.test(f));
+    const x = find(/^(x|east)/i) || find(/lon/i) || nums[0];
+    const y = find(/^(y|north)/i) || find(/lat/i) || nums.find((f) => f !== x);
+    const z = find(/^(z|tvd|depth|elev|alt)/i) || nums.find((f) => f !== x && f !== y);
+    return x && y && z ? { x, y, z } : null;
+  }
+  function renderThreeDInto(root, pfx, name, opts) {
+    const rows = rowsOf(name);
+    const sample = rows.slice(0, SAMPLE_N);
+    const ax = (opts && opts.x && opts.y && opts.z)
+      ? { x: resolveField(name, opts.x, sample), y: resolveField(name, opts.y, sample), z: resolveField(name, opts.z, sample) }
+      : axis3Of(sample);
+    const b = vbuild(root, pfx);
+    b.add('div', 'note', null, 0); b.set('note', 'class', 'explorer-note');
+    if (!ax || !ax.x || !ax.y || !ax.z) { b.text('note', 'a 3d view needs three numeric fields'); return; }
+    const lane = resolveField(name, opts && opts.group, sample) || laneFieldOf(sample);
+    let pts = rows
+      .filter((r) => typeof r[ax.x] === 'number' && typeof r[ax.y] === 'number' && typeof r[ax.z] === 'number')
+      .map((r) => [r[ax.x], r[ax.y], r[ax.z], lane ? String(r[lane] ?? '') : '']);
+    if (!pts.length) { b.text('note', 'no rows carry all three fields'); return; }
+    const total = pts.length, CAP = 4000;
+    if (total > CAP) { const step = Math.ceil(total / CAP); pts = pts.filter((_, i) => i % step === 0); }
+    // normalize into a unit cube around the origin (z up: screen y falls with it)
+    const mins = [0, 1, 2].map((i) => Math.min(...pts.map((p) => p[i])));
+    const maxs = [0, 1, 2].map((i) => Math.max(...pts.map((p) => p[i])));
+    const span = [0, 1, 2].map((i) => (maxs[i] - mins[i]) || 1);
+    const norm = pts.map((p) => [((p[0] - mins[0]) / span[0]) - 0.5, ((p[1] - mins[1]) / span[1]) - 0.5, ((p[2] - mins[2]) / span[2]) - 0.5, p[3]]);
+    const groups = [...new Set(norm.map((p) => p[3]))].slice(0, PALETTE.length);
+    const connect = !!(opts && opts.connect);
+    b.text('note', `${fmtInt(pts.length)}${pts.length < total ? ` of ${fmtInt(total)}` : ''} points · ${fieldTitle(name, ax.x)} × ${fieldTitle(name, ax.y)} × ${fieldTitle(name, ax.z)}${lane ? ' · by ' + fieldTitle(name, lane) : ''} · drag to orbit`);
+    const W = 1000, H = 560, S = 400;
+    b.add('svg', 'svg', null, 1); b.set('svg', 'viewBox', `0 0 ${W} ${H}`); b.set('svg', 'class', 'chart chart3d');
+    b.add('path', 'box', 'svg', 0); b.set('box', 'class', 'cube-edge');
+    groups.forEach((gv, gi) => {
+      const k = `g${gi}`;
+      b.add('path', k, 'svg', 1 + gi);
+      b.set(k, 'class', connect ? 'track3d' : 'cloud3d');
+      b.set(k, 'stroke', PALETTE[gi % PALETTE.length]);
+    });
+    if (lane && groups.length > 1) {
+      b.add('div', 'leg', null, 2); b.set('leg', 'class', 'donut-leg leg3d');
+      groups.forEach((gv, gi) => {
+        const k = `gl${gi}`;
+        b.add('div', k, 'leg', gi); b.set(k, 'class', 'donut-li');
+        b.add('span', `${k}d`, k, 0); b.set(`${k}d`, 'class', 'donut-dot'); b.set(`${k}d`, 'style', `background:${PALETTE[gi % PALETTE.length]}`);
+        b.add('span', `${k}t`, k, 1); b.text(`${k}t`, gv || '(blank)');
+      });
+    }
+    const svgKey = `${pfx}:svg`;
+    const st = { yaw: 0.7, pitch: 0.42, redraw: null };
+    st.redraw = () => {
+      const cy = Math.cos(st.yaw), sy = Math.sin(st.yaw), cp = Math.cos(st.pitch), sp = Math.sin(st.pitch);
+      const proj = (p) => {
+        const rx = p[0] * cy - p[1] * sy, ry = p[0] * sy + p[1] * cy;
+        const px = W / 2 + rx * S;
+        const py = H / 2 - (p[2] * cp - ry * sp) * S * 0.85;
+        return [px, py, ry * cp + p[2] * sp];
+      };
+      groups.forEach((gv, gi) => {
+        const mine = norm.filter((p) => p[3] === gv);
+        const projected = mine.map(proj);
+        if (!connect) projected.sort((a, c) => a[2] - c[2]); // painter's order
+        let d = '';
+        projected.forEach((q, i) => {
+          d += connect
+            ? `${i ? 'L' : 'M'}${q[0].toFixed(1)} ${q[1].toFixed(1)}`
+            : `M${q[0].toFixed(1)} ${q[1].toFixed(1)}l.1 0`;
+        });
+        TWIN_MUT.push({ op: 'setAttr', key: `${pfx}:g${gi}`, name: 'd', value: d });
+      });
+      // the unit cube's 12 edges, so the eye keeps its bearings
+      const C = [-0.5, 0.5];
+      let d = '';
+      for (const a of C) for (const bb of C) {
+        const e1 = proj([a, bb, -0.5]), e2 = proj([a, bb, 0.5]);
+        const e3 = proj([a, -0.5, bb]), e4 = proj([a, 0.5, bb]);
+        const e5 = proj([-0.5, a, bb]), e6 = proj([0.5, a, bb]);
+        d += `M${e1[0].toFixed(1)} ${e1[1].toFixed(1)}L${e2[0].toFixed(1)} ${e2[1].toFixed(1)}`;
+        d += `M${e3[0].toFixed(1)} ${e3[1].toFixed(1)}L${e4[0].toFixed(1)} ${e4[1].toFixed(1)}`;
+        d += `M${e5[0].toFixed(1)} ${e5[1].toFixed(1)}L${e6[0].toFixed(1)} ${e6[1].toFixed(1)}`;
+      }
+      TWIN_MUT.push({ op: 'setAttr', key: `${pfx}:box`, name: 'd', value: d });
+    };
+    orbits.set(svgKey, st);
+    st.redraw();
+  }
+  // a drag on a 3d view: view state exactly like a viewport — never journaled
+  function orbitView(e) {
+    const st = orbits.get(String(e.key || ''));
+    if (!st) return;
+    st.yaw = Number(e.yaw) || 0;
+    st.pitch = Math.max(-1.4, Math.min(1.4, Number(e.pitch) || 0));
+    st.redraw();
+  }
+
   // ---- reading view: long-text rows as sections you READ — heading from the
   // row's name, date alongside, body rendered as markdown (plain prose passes
   // through unharmed).  Reports become a document instead of truncated cells.
@@ -1460,6 +1760,11 @@ const T = (() => {
     scatter: (root, pfx, name, opts) => renderScatterInto(root, pfx, name, opts || {}),
     map: (root, pfx, name, opts) => renderScatterInto(root, pfx, name, Object.assign({ geo: true }, opts || {})),
     reading: renderReadingInto,
+    metric: renderMetricInto,
+    donut: renderDonutInto,
+    heatmap: renderHeatmapInto,
+    gantt: renderGanttInto,
+    '3d': renderThreeDInto,
   };
   function renderAggPanel(V, name, s, mode) {
     const i = renderSourceHeader(V, name, s, mode);
@@ -2797,6 +3102,7 @@ const T = (() => {
     // and touches neither the raw input stream nor the journal (like mouse
     // position, it re-derives from the next scroll — replaying it means nothing)
     if (e.type === 'viewport') { tableViewport(e); return; }
+    if (e.type === 'orbit') { orbitView(e); return; } // a 3d drag — view state too
     if (e.ts) bnow = Math.max(bnow, Number(e.ts) || 0); // boundary-stamped time rides in
     inputSeq += 1;
     const raw = Object.assign({ seq: inputSeq, ts: 0 }, e);

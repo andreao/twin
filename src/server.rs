@@ -421,12 +421,12 @@ fn graph_loop(
                     // EVERY user action is captured in its rawest form (§8 pure event
                     // sourcing): stamp arrival time at the boundary, apply it (raw capture
                     // + derivations + any boundary fetch), and journal it for replay.
-                    // One exception: viewport reports are VIEW state (where a table is
-                    // scrolled) — applied for the window move, never journaled.
+                    // One exception: view state (where a table is scrolled, how a 3d
+                    // view is turned) — applied for the redraw, never journaled.
                     v["ts"] = serde_json::json!(now_ms());
                     let stamped = v.to_string();
                     apply_event(&mut g, &stamped);
-                    if etype != "viewport" {
+                    if etype != "viewport" && etype != "orbit" {
                         journal_append(&mut journal, "ev", &stamped);
                     }
                     if etype == "pause" || etype == "resume" {

@@ -19,3 +19,7 @@
 # app-shell build artifacts + the local server log
 /tauri/gen/schemas/
 serve.log
+
+# the showcase ships with the repo: generated demo data + its seeded project
+!/data/showcase/
+!/data/projects/showcase/

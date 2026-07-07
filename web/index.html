@@ -372,8 +372,27 @@
   .md-body code { font-family: ui-monospace, "SF Mono", monospace; font-size: 12px; background: #f4f2ee; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
   .md-body pre { font-family: ui-monospace, "SF Mono", monospace; font-size: 11.5px; line-height: 1.6; background: #f4f2ee; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
   .md-body a { color: var(--accent); }
+  /* metric tiles, donuts, heatmaps, gantt, 3d */
+  .metric { padding: 6px 2px; }
+  .metric-v { font-size: 34px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; }
+  .metric-l { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .donut-wrap { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
+  .donut { width: 190px; height: 190px; flex: none; }
+  .donut-leg { font-size: 12.5px; display: flex; flex-direction: column; gap: 5px; }
+  .donut-li { display: flex; align-items: center; gap: 8px; }
+  .donut-dot { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+  .hm-x { text-anchor: middle; }
+  .chart3d { cursor: grab; touch-action: none; }
+  .chart3d:active { cursor: grabbing; }
+  .cube-edge { fill: none; stroke: var(--line); stroke-width: 1; }
+  .cloud3d { fill: none; stroke-width: 4; stroke-linecap: round; opacity: .6; }
+  .track3d { fill: none; stroke-width: 2.2; stroke-linejoin: round; opacity: .85; }
+  .leg3d { flex-direction: row; gap: 16px; margin-top: 6px; }
+
   /* a view embedded in rendered text (a note, a dashboard): a framed slot */
   .md-embed { margin: 14px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); max-width: none; }
+  /* metric embeds sit side by side — a row of tiles, not a stack */
+  .md-embed:has(> .metric) { display: inline-block; min-width: 170px; margin-right: 10px; vertical-align: top; }
   .md-embed-t { font-size: 13px; font-weight: 650; margin-bottom: 8px; }
   .md-embed .explorer-note { margin-bottom: 8px; }
   .md-embed .view-scroll { max-height: 40vh; }
@@ -991,6 +1010,7 @@
         if (parent) insertAt(parent, el, m.index);
         wire(el, m.key);
         if (/(^|:)exp:scroll$/.test(m.key)) wireViewport(el, m.key);
+        if (m.tag === "svg") wireOrbit(el, m.key);
         break;
       }
       case "move": { const el = nodes.get(m.key), p = nodes.get(m.parent); if (el && p) insertAt(p, el, m.index); break; }
@@ -1043,6 +1063,28 @@
       send(ev);
     };
     el.addEventListener("scroll", () => { if (!timer) timer = setTimeout(report, 70); }, { passive: true });
+  }
+
+  // Drag on a 3d view orbits it: the client owns the gesture, the server owns the
+  // projection. Angles ride a transient orbit event (like viewport — never journaled).
+  function wireOrbit(el, key) {
+    let dragging = null, yaw = 0.7, pitch = 0.42, timer = null;
+    const sendAngles = () => { timer = null; send({ type: "orbit", key, yaw, pitch }); };
+    el.addEventListener("pointerdown", (e) => {
+      if (!el.classList.contains("chart3d")) return;
+      dragging = { x: e.clientX, y: e.clientY };
+      el.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    });
+    el.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      yaw += (e.clientX - dragging.x) * 0.008;
+      pitch = Math.max(-1.4, Math.min(1.4, pitch + (e.clientY - dragging.y) * 0.006));
+      dragging = { x: e.clientX, y: e.clientY };
+      if (!timer) timer = setTimeout(sendAngles, 40);
+    });
+    el.addEventListener("pointerup", () => { dragging = null; });
+    el.addEventListener("pointercancel", () => { dragging = null; });
   }
 
   function autoscroll() {
