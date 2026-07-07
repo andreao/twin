@@ -581,6 +581,10 @@ const T = (() => {
   function resolveSourceName(n) {
     const name = String(n || '');
     if (sources.has(name) || sourceIds.has(name)) return name;
+    if (dashboards.has(name) || dashboards.has(dashSlug(name))) return dashboards.has(name) ? name : dashSlug(name);
+    for (const [slug, d] of dashboards) {
+      if (d.title.toLowerCase() === name.toLowerCase()) return slug;
+    }
     const bare = name.replace(/^lens:\s*/i, '').trim();
     const slug = 'lens:' + bare.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
     if (sources.has(slug) || sourceIds.has(slug)) return slug;
@@ -661,6 +665,8 @@ const T = (() => {
   }
 
   function openSource(name, mode, panel, title) {
+    const d = dashboards.get(name);
+    if (d) return openDashboard(name, d, panel, title);
     const s = sources.get(name);
     if (!s) return;
     const V = viewer(panel, title || srcTitle(name), { type: 'open_source', name, mode: mode || '' });
@@ -948,8 +954,11 @@ const T = (() => {
         layoutTable(t);
       }
       // open aggregate views (calendar, board, histogram…) redraw whole — they
-      // are bounded DOM by construction, so a redraw is a screenful, not a scan
-      for (const [, v] of [...liveViews]) if (v.id === id) v.rerender();
+      // are bounded DOM by construction, so a redraw is a screenful, not a scan;
+      // a dashboard subscribes to EVERY source its embedded views read
+      for (const [, v] of [...liveViews]) {
+        if (v.id === id || (v.ids && v.ids.has(id))) v.rerender();
+      }
     });
   }
 
@@ -1024,7 +1033,9 @@ const T = (() => {
       } else { b.add('span', k, parent, i); b.text(k, part); }
     }
   }
-  function renderMarkdownInto(root, pfx, text) {
+  // `seen` (optional) collects the graph node ids of every EMBEDDED view's
+  // source, so a hosting page (a dashboard) can subscribe and stay live.
+  function renderMarkdownInto(root, pfx, text, seen) {
     const b = vbuild(root, pfx);
     b.add('div', 'md', null, 0); b.set('md', 'class', 'md-body');
     const lines = String(text || '').split('\n');
@@ -1040,10 +1051,14 @@ const T = (() => {
       const ln = lines[i];
       if (/^```/.test(ln)) {
         flushPara(); flushList();
+        const info = ln.slice(3).trim().toLowerCase();
         const code = [];
         i++;
         while (i < lines.length && !/^```/.test(lines[i])) code.push(lines[i++]);
         i++;
+        // COMPOSITION: a fenced block whose language is `view` embeds a real,
+        // rendered view — the same JSON args as the show tool — inside the text
+        if (info === 'view') { renderEmbed(b, blk++, code.join('\n'), seen); continue; }
         const k = `c${blk++}`;
         b.add('pre', k, 'md', blk); b.text(k, code.join('\n'));
         continue;
@@ -1071,6 +1086,107 @@ const T = (() => {
       i++;
     }
     flushPara();
+  }
+
+  // what a view block (or a show call) may name, and what it means here
+  const EMBED_ALIAS = {
+    table: 'table',
+    calendar: 'calendar',
+    kanban: 'kanban', board: 'kanban',
+    histogram: 'histogram', hist: 'histogram', distribution: 'histogram',
+    scatter: 'scatter',
+    map: 'map', geo: 'map',
+    reading: 'reading',
+  };
+
+  // one embedded view inside rendered markdown: parse the block's JSON, resolve
+  // the source, render the real component into a framed slot — a bad block
+  // degrades to a readable note plus the code itself, never a blank hole
+  function renderEmbed(b, blk, jsonText, seen) {
+    const k = `e${blk}`;
+    const slot = b.add('div', k, 'md', blk);
+    b.set(k, 'class', 'md-embed');
+    let a = null;
+    try { a = JSON.parse(jsonText); } catch (_) { /* handled below */ }
+    const mode = a && EMBED_ALIAS[String(a.view || '').toLowerCase()];
+    if (!mode) {
+      b.add('div', `${k}n`, k, 0); b.set(`${k}n`, 'class', 'explorer-note');
+      b.text(`${k}n`, 'this view block did not parse (expected JSON with a "view")');
+      b.add('pre', `${k}p`, k, 1); b.text(`${k}p`, jsonText);
+      return;
+    }
+    const srcName = resolveSourceName(a.source || a.name);
+    const s = sources.get(srcName);
+    if (!s) {
+      b.add('div', `${k}n`, k, 0); b.set(`${k}n`, 'class', 'explorer-note');
+      b.text(`${k}n`, `no source “${srcName}” to embed — mount it first`);
+      return;
+    }
+    if (a.title) { b.add('div', `${k}t`, k, 0); b.set(`${k}t`, 'class', 'md-embed-t'); b.text(`${k}t`, String(a.title)); }
+    if (mode === 'table') {
+      const limit = Math.max(1, Math.min(Number(a.limit) || 8, 40));
+      const rows = rowsOf(srcName).slice(0, limit);
+      const cols = Array.isArray(a.columns) && a.columns.length
+        ? a.columns.map((c) => resolveField(srcName, c, rows)).filter(Boolean)
+        : Object.keys(s.schema || rows[0] || {});
+      renderTableInto(slot, `${slot}:v`, rows, cols, `${rows.length} of ${fmtInt(s.rowcount)} rows`, srcName);
+    } else {
+      AGG_VIEWS[mode](slot, `${slot}:v`, srcName, a);
+    }
+    if (seen) {
+      const id = sourceIds.get(srcName);
+      if (id !== undefined) seen.push(id);
+    }
+  }
+
+  // ---- dashboards: a DOCUMENT lens — markdown whose view blocks are live views.
+  // Durable (the make_dashboard tool journals and replays), a tile on the board,
+  // and while open it re-renders when any embedded source changes.
+  const dashboards = new Map(); // slug -> { title, description, body }
+  const dashTiles = new Set();
+  const dashSlug = (t) => 'dash-' + String(t).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  function doMakeDashboard(a) {
+    const title = String(a.name || a.title || '').trim();
+    const body = String(a.body || a.markdown || a.text || '');
+    if (!title || !body) return;
+    const slug = dashSlug(title);
+    const description = String(a.description || '').trim();
+    dashboards.set(slug, { title, description, body });
+    const views = (body.match(/^```\s*view\s*$/gm) || []).length;
+    const facts = `a dashboard · ${views} live view${views === 1 ? '' : 's'}`;
+    const rk = `sr:${slug}`;
+    if (dashTiles.has(slug)) {
+      TWIN_MUT.push({ op: 'setAttr', key: rk, name: 'data-title', value: title });
+      TWIN_MUT.push({ op: 'setText', key: `${rk}:n`, text: title });
+      TWIN_MUT.push({ op: 'setText', key: `${rk}:desc`, text: description });
+      TWIN_MUT.push({ op: 'setText', key: `${rk}:d`, text: facts });
+    } else {
+      dashTiles.add(slug);
+      TWIN_MUT.push({ op: 'create', key: rk, tag: 'div', parent: 'board-root', index: 0 });
+      TWIN_MUT.push({ op: 'setAttr', key: rk, name: 'class', value: 'src-row' });
+      TWIN_MUT.push({ op: 'setAttr', key: rk, name: 'data-title', value: title });
+      TWIN_MUT.push({ op: 'create', key: `${rk}:n`, tag: 'div', parent: rk, index: 0 });
+      TWIN_MUT.push({ op: 'setAttr', key: `${rk}:n`, name: 'class', value: 'src-n' });
+      TWIN_MUT.push({ op: 'setText', key: `${rk}:n`, text: title });
+      TWIN_MUT.push({ op: 'create', key: `${rk}:desc`, tag: 'div', parent: rk, index: 1 });
+      TWIN_MUT.push({ op: 'setAttr', key: `${rk}:desc`, name: 'class', value: 'src-desc' });
+      TWIN_MUT.push({ op: 'setText', key: `${rk}:desc`, text: description });
+      TWIN_MUT.push({ op: 'create', key: `${rk}:d`, tag: 'div', parent: rk, index: 2 });
+      TWIN_MUT.push({ op: 'setAttr', key: `${rk}:d`, name: 'class', value: 'src-d' });
+      TWIN_MUT.push({ op: 'setText', key: `${rk}:d`, text: facts });
+    }
+    // an open copy redraws with the new body
+    for (const v of [...liveViews.values()]) if (v.dash === slug) v.rerender();
+  }
+  function openDashboard(slug, d, panel, title) {
+    const V = viewer(panel, title || d.title, { type: 'open_source', name: slug });
+    let i = 0;
+    if (d.description) { V.add('div', 'exp:desc', null, i++); V.set('exp:desc', 'class', 'src-desc'); V.text('exp:desc', d.description); }
+    V.add('div', 'exp:dash', null, i);
+    const seen = [];
+    renderMarkdownInto(V.key('exp:dash'), V.key('exp:dash') + ':v', d.body, seen);
+    liveViews.set(V.panel, { ids: new Set(seen), dash: slug, rerender: () => openSource(slug, '', V.panel) });
+    seen.forEach(observeTableNode);
   }
 
   // ---- calendar: rows bucketed per day on their date field, the last months
@@ -2497,9 +2613,8 @@ const T = (() => {
       return;
     }
     // the aggregate views render inline exactly as they do in a panel
-    const AGG_ALIAS = { calendar: 'calendar', kanban: 'kanban', board: 'kanban', histogram: 'histogram', hist: 'histogram', distribution: 'histogram', scatter: 'scatter', map: 'map', geo: 'map', reading: 'reading' };
-    if (AGG_ALIAS[view]) {
-      const mode = AGG_ALIAS[view];
+    if (EMBED_ALIAS[view] && EMBED_ALIAS[view] !== 'table') {
+      const mode = EMBED_ALIAS[view];
       const srcName2 = resolveSourceName(a.source || a.name);
       const s2 = sources.get(srcName2);
       if (!s2) { append('system', { text: `No source “${srcName2}” to show — mount it first.` }); return; }
@@ -2590,6 +2705,7 @@ const T = (() => {
       case 'record_profile': recordProfile(a.field, a.value); break;
       case 'inspect': inspectSource(a.source); break;
       case 'show': doShow(a); break;
+      case 'make_dashboard': doMakeDashboard(a); break;
       case 'plan': {
         const items = Array.isArray(a.items) ? a.items : [a.text || a.item];
         items.filter(Boolean).forEach((t) => {
@@ -2793,6 +2909,7 @@ const T = (() => {
       agendaDone: ag.filter((a) => a.status === 'done').length,
       findings: [...findings.values()].slice(-8).map((f) => ({ severity: f.severity, text: f.text })),
       lenses: [...lenses].map(([name, l]) => ({ name: 'lens:' + name, title: l.title, description: l.description, source: l.source, rowcount: l.rowcount })),
+      dashboards: [...dashboards].map(([slug, d]) => ({ name: slug, title: d.title, description: d.description })),
       activity: activityTail.slice(-8).map(stepLine),
       userActions: userActions.slice(-10),
       feed: recent,

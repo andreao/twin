@@ -372,6 +372,11 @@
   .md-body code { font-family: ui-monospace, "SF Mono", monospace; font-size: 12px; background: #f4f2ee; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
   .md-body pre { font-family: ui-monospace, "SF Mono", monospace; font-size: 11.5px; line-height: 1.6; background: #f4f2ee; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
   .md-body a { color: var(--accent); }
+  /* a view embedded in rendered text (a note, a dashboard): a framed slot */
+  .md-embed { margin: 14px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); max-width: none; }
+  .md-embed-t { font-size: 13px; font-weight: 650; margin-bottom: 8px; }
+  .md-embed .explorer-note { margin-bottom: 8px; }
+  .md-embed .view-scroll { max-height: 40vh; }
 
   /* ---- the phone: one thing on screen at a time ---- */
   @media (max-width: 720px) {
