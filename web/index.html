@@ -1,4 +1,10 @@
 <title>Vardøger</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#faf9f7">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Vardøger">
 <style>
   :root {
     --bg: #faf9f7; --panel: #ffffff; --ink: #22201d; --muted: #8a857c;
@@ -10,11 +16,16 @@
   body {
     margin: 0; background: var(--bg); color: var(--ink);
     font: 15px/1.55 -apple-system, "SF Pro Text", system-ui, sans-serif;
-    display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+    display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden;
+    -webkit-tap-highlight-color: transparent; overscroll-behavior: none;
   }
 
   /* ---- one header: brand · starred · recents · live ---- */
-  .top { display: flex; align-items: center; gap: 14px; padding: 0 18px; height: 50px; background: var(--panel); border-bottom: 1px solid var(--line); flex: none; }
+  .top {
+    display: flex; align-items: center; gap: 14px; height: calc(50px + env(safe-area-inset-top, 0px));
+    padding: env(safe-area-inset-top, 0px) calc(18px + env(safe-area-inset-right, 0px)) 0 calc(18px + env(safe-area-inset-left, 0px));
+    background: var(--panel); border-bottom: 1px solid var(--line); flex: none;
+  }
   .brand { font-weight: 650; font-size: 16px; letter-spacing: -0.01em; display: flex; align-items: center; gap: 9px; flex: none; }
   .brand svg { display: block; }
   .chips { display: flex; align-items: center; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
@@ -169,7 +180,7 @@
   .composer button { border: none; background: var(--accent); color: #fff; border-radius: 10px; width: 34px; height: 34px; font-size: 16px; cursor: pointer; flex: none; }
 
   /* ---- the status bar (Claude Code-style): background work at a glance ---- */
-  .statusbar { max-width: 760px; margin: 0 auto; width: 100%; padding: 7px 24px 10px; font-size: 12px; color: var(--muted); display: flex; align-items: baseline; gap: 9px; cursor: pointer; flex: none; }
+  .statusbar { max-width: 760px; margin: 0 auto; width: 100%; padding: 7px 24px calc(10px + env(safe-area-inset-bottom, 0px)); font-size: 12px; color: var(--muted); display: flex; align-items: baseline; gap: 9px; cursor: pointer; flex: none; }
   .statusbar:hover #status-open { color: var(--accent); }
   .statusbar > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .now-dot { width: 7px; height: 7px; border-radius: 50%; background: #ccc; flex: none; align-self: center; }
@@ -187,6 +198,8 @@
   .panel-title { font-weight: 600; font-size: 13.5px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .panel-btn { border: none; background: none; color: var(--muted); font: inherit; font-size: 14px; cursor: pointer; padding: 2px 6px; border-radius: 6px; flex: none; }
   .panel-btn:hover { background: var(--accent-soft); color: var(--accent); }
+  /* phone-only: ‹ walks back one column (the last one returns to the chat) */
+  .panel-back { display: none; font-size: 19px; line-height: 1; padding: 2px 10px 4px 2px; }
   /* sticky table headers pin flush to the top: the scroller has NO top padding
      (padding there leaves a see-through strip above a sticky th) */
   .panel-body { flex: 1; min-height: 0; overflow: auto; padding: 0 16px 16px; }
@@ -315,6 +328,45 @@
   .doc-type { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
   .doc-frame { width: 100%; height: 74vh; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
   .doc-img { max-width: 100%; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+
+  /* ---- the phone: one thing on screen at a time ---- */
+  @media (max-width: 720px) {
+    .brand-name { display: none; }
+    .top { gap: 8px; padding-left: calc(12px + env(safe-area-inset-left, 0px)); padding-right: calc(12px + env(safe-area-inset-right, 0px)); }
+    #stars-root { max-width: 32%; }
+    .feed { padding: 16px 14px 8px; }
+    .feed-item.user .text { max-width: 88%; }
+    .composer { padding: 8px 10px 0; }
+    .statusbar { padding-left: 14px; padding-right: 14px; }
+    /* iOS zooms any focused field under 16px — keep inputs at 16 so it never does */
+    .composer textarea, .proj-form input { font-size: 16px; }
+    /* the detail stack takes the whole screen: columns become pages; swipe between
+       them (snap), ‹ walks back, the last ‹ returns to the chat */
+    .app.split .conv { display: none; }
+    .stack { scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; }
+    .panel, .panel:last-child { width: 100% !important; min-width: 100%; flex: none !important; scroll-snap-align: start; scroll-snap-stop: always; border-right: none; }
+    .panel-back { display: block; }
+    .panel-head { padding: 8px 10px; }
+    .panel-body, .panel-sub-body { padding: 0 14px calc(14px + env(safe-area-inset-bottom, 0px)); }
+    .doc-frame { height: 62vh; height: 62dvh; }
+    .doc-gallery { grid-template-columns: 1fr; }
+    .fd-text { max-width: none; }
+  }
+
+  /* ---- touch: fingers, not cursors ---- */
+  @media (pointer: coarse) {
+    .panel-rz, .conv-rz { display: none !important; }
+    .chip { padding: 7px 14px; font-size: 13px; }
+    .panel-btn { font-size: 17px; padding: 6px 10px; }
+    .panel-back { font-size: 22px; padding: 4px 12px 6px 4px; }
+    .q-option { padding: 12px 14px; }
+    .fd-btn { padding: 10px 16px; }
+    .composer button { width: 40px; height: 40px; border-radius: 12px; }
+    .status { padding: 8px 10px; }
+    .status-menu button { padding: 11px 12px; }
+    .mode-btn { padding: 8px 14px; }
+    .steps-toggle, .code-toggle { padding: 6px 12px; }
+  }
 </style>
 
 <header class="top">
@@ -324,7 +376,7 @@
       <circle cx="14.5" cy="11" r="7" fill="none" stroke="#c96442" stroke-width="2.2"/>
       <circle cx="8" cy="13.5" r="7" fill="none" stroke="#c96442" stroke-width="1.2" opacity="0.45"/>
     </svg>
-    Vardøger
+    <span class="brand-name">Vardøger</span>
   </div>
   <!-- the project switcher: a project is a completely separate everything -->
   <div class="proj" id="proj">
@@ -381,6 +433,16 @@
   boardRoot.className = "board-grid";
   nodes.set("board-root", boardRoot);
 
+  // ---- where the twin node lives: same-origin when this page is served BY the node
+  // (a browser tab); a stored host when the page is a bundled shell (the Tauri app on
+  // a phone) — then the live menu grows a "Twin node…" form to point it somewhere.
+  const SAME_ORIGIN = /^https?:$/.test(location.protocol);
+  const nodeHost = () => (localStorage.getItem("twin-host") || "127.0.0.1:8080").replace(/^[a-z]+:\/\//, "").replace(/\/+$/, "");
+  const HTTP_BASE = SAME_ORIGIN ? "" : "http://" + nodeHost();
+  const WS_BASE = SAME_ORIGIN
+    ? (location.protocol === "https:" ? "wss://" : "ws://") + location.host
+    : "ws://" + nodeHost();
+
   // ---- the project: one slug from the URL; the socket, and so everything, is scoped by it ----
   const slugify = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   const PROJECT = slugify(new URLSearchParams(location.search).get("project")) || "default";
@@ -388,7 +450,7 @@
   const projMenu = document.getElementById("proj-menu");
   projName.textContent = PROJECT;
   // the chip and the tab carry the project's TITLE, not its slug
-  const fetchProjects = async () => { try { return await (await fetch("/projects")).json(); } catch (_) { return []; } };
+  const fetchProjects = async () => { try { return await (await fetch(HTTP_BASE + "/projects")).json(); } catch (_) { return []; } };
   fetchProjects().then((list) => {
     const me = list.find((p) => p.slug === PROJECT);
     if (me && me.title) {
@@ -419,7 +481,7 @@
     create.addEventListener("click", async () => {
       if (!name.value.trim()) { name.focus(); return; }
       try {
-        const r = await fetch("/projects", { method: "POST", body: JSON.stringify({ name: name.value, description: desc.value }) });
+        const r = await fetch(HTTP_BASE + "/projects", { method: "POST", body: JSON.stringify({ name: name.value, description: desc.value }) });
         const j = await r.json();
         if (j.slug) gotoProject(j.slug);
       } catch (_) {}
@@ -500,6 +562,36 @@
   menuNote.className = "menu-note";
   const pauseBtn = document.createElement("button");
   statusMenu.append(pauseBtn, menuNote);
+  // a bundled shell needs to be told where its twin node lives — the form lives
+  // in the live menu, in the app's own grammar (no browser prompt)
+  if (!SAME_ORIGIN) {
+    const hostBtn = document.createElement("button");
+    hostBtn.textContent = "Twin node…";
+    hostBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      statusMenu.textContent = "";
+      const form = document.createElement("div");
+      form.className = "proj-form";
+      const host = document.createElement("input");
+      host.placeholder = "host:port of your twin node";
+      host.value = nodeHost();
+      const row = document.createElement("div");
+      row.className = "proj-form-row";
+      const save = document.createElement("button");
+      save.className = "fd-btn primary";
+      save.textContent = "Connect";
+      save.addEventListener("click", () => {
+        localStorage.setItem("twin-host", host.value.trim());
+        location.reload();
+      });
+      host.addEventListener("keydown", (ev) => { if (ev.key === "Enter") save.click(); });
+      row.append(save);
+      form.append(host, row);
+      statusMenu.appendChild(form);
+      host.focus();
+    });
+    statusMenu.appendChild(hostBtn);
+  }
   statusEl.appendChild(statusMenu);
   function renderTwinState() {
     statusEl.classList.toggle("paused", twinPaused);
@@ -568,7 +660,7 @@
   let ws;
   let freshSnapshot = false; // the first batch after (re)connect = full history replay
   function connect() {
-    ws = new WebSocket(`ws://${location.host}/ws?project=${encodeURIComponent(PROJECT)}`);
+    ws = new WebSocket(`${WS_BASE}/ws?project=${encodeURIComponent(PROJECT)}`);
     ws.onopen = () => { resetDom(); freshSnapshot = true; wsLive = true; statusEl.classList.add("live"); renderTwinState(); };
     ws.onclose = () => {
       wsLive = false; statusEl.classList.remove("live"); statusText.textContent = "reconnecting…";
@@ -643,7 +735,14 @@
     // closing is an EVENT: the graph clears the column and the close marker echoes
     // back to tear down the chrome — so the open stack is always twin state
     close.addEventListener("click", () => { send({ type: "close_panel", panel: my }); removeTopPanels(my); });
-    head.append(t, star, close);
+    // on a phone every column is a page: ‹ closes this one and everything above,
+    // so the last ‹ lands back in the chat (same event as ×, phone-only chrome)
+    const back = document.createElement("button");
+    back.className = "panel-btn panel-back";
+    back.title = "Back";
+    back.textContent = "‹";
+    back.addEventListener("click", () => { send({ type: "close_panel", panel: my }); removeTopPanels(my); });
+    head.append(back, t, star, close);
     const body = document.createElement("div");
     body.className = "panel-body";
     p.bodyEl = body;
@@ -849,7 +948,13 @@
         const ps = /^panel:(\d+):sub$/.exec(m.key);
         if (ps) { restorePanel(Number(ps[1])); ensureSub(Number(ps[1]), null); }
         const el = nodes.get(m.key);
-        if (el) { if (m.value == null) el.removeAttribute(m.name); else el.setAttribute(m.name, m.value); }
+        // a shell (Tauri) is not same-origin with the node: root-relative documents
+        // ("/file/x.pdf") must point back at the node explicitly
+        let value = m.value;
+        if (!SAME_ORIGIN && (m.name === "src" || m.name === "href") && typeof value === "string" && value.startsWith("/")) {
+          value = HTTP_BASE + value;
+        }
+        if (el) { if (value == null) el.removeAttribute(m.name); else el.setAttribute(m.name, value); }
         if (pb) syncPanel(Number(pb[1]), m.name, m.value);
         if (ps) syncSub(Number(ps[1]), m.name, m.value);
         break;
@@ -881,6 +986,21 @@
   input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = input.scrollHeight + "px"; });
   input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitMessage(); } });
   sendBtn.addEventListener("click", submitMessage);
+
+  // the on-screen keyboard: iOS never resizes the layout viewport for it, so
+  // mirror the visual viewport onto the body (the composer rides above the keys)
+  // and keep the conversation pinned at NOW while it animates in
+  if (window.visualViewport) {
+    const vv = window.visualViewport;
+    let lastH = vv.height;
+    vv.addEventListener("resize", () => {
+      if (vv.scale && Math.abs(vv.scale - 1) > 0.01) return; // pinch-zoom, not the keyboard
+      document.body.style.height = Math.round(vv.height) + "px";
+      window.scrollTo(0, 0);
+      if (vv.height < lastH) requestAnimationFrame(() => { feedwrap.scrollTop = feedwrap.scrollHeight; });
+      lastH = vv.height;
+    });
+  }
 
   connect();
 })();

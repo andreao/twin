@@ -102,6 +102,33 @@ cargo run --example bench --release    # §17 invariants (A1, overlay, hot-swap,
 cargo test                             # 45 tests
 ```
 
+The thin client is responsive down to a phone: the detail stack becomes
+full-screen pages you swipe between (‹ walks back), touch targets grow, and the
+composer rides the on-screen keyboard.  `tauri/` wraps the same everything as a
+native app — the whole runtime embedded on desktop, a thin host on iOS/Android
+that connects out to your node (see `tauri/README.md`).
+
+## Sync: serverless, peer-to-peer (`--features sync`)
+
+Two twins pair by public key and reconcile journals over [iroh] — the
+connection dials a key and finds its own route (hole-punched when possible,
+relayed when not; end-to-end encrypted either way).  The journal generalizes to
+a set of per-origin append-only logs (src/sync.rs): local lines are this node's
+log; merged lines carry `o`/`s` origin tags, so replay — and therefore the twin
+itself — reconstructs the merged history, and a peer's effects are never
+re-executed here (§8: replay stops at the boundary).
+
+```bash
+cargo run --bin twin-sync --features sync -- id     # this node's id (mints a key)
+cargo run --bin twin-sync --features sync -- add <the other node's id>
+cargo run --bin serve --features sync               # sync on, all projects
+```
+
+Both sides add each other; that's the whole pairing.  The default build keeps
+the three-crate dependency story — iroh only rides behind the feature.
+
+[iroh]: https://www.iroh.computer
+
 Measured here (`--release`): A1 edit recomputes ~4% of a 2060-node graph, **0**
 downstream on a no-op output; **200,000** 0-copy branches at **~0.13 µs/fork**;
 hot-swap **~18 µs**; governed branches byte-identical under the same seed; table

@@ -1,0 +1,24 @@
+[package]
+name = "vardoger"
+version = "0.1.0"
+edition = "2021"
+description = "Vardøger — the twin as an app: the runtime embedded on desktop, a thin host on the phone."
+
+# This crate is intentionally OUTSIDE the runtime's dependency story: the core stays
+# at v8/sha2/serde_json; the app shell is where the heavy platform deps live.
+
+[lib]
+name = "vardoger_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+# The full twin runtime rides along ONLY where raw V8 can: desktops. A phone build
+# is a thin host — the page connects out to your node (see web/index.html's
+# "Twin node…" form), so rusty_v8 never has to cross-compile to iOS/Android.
+[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
+twin-runtime = { path = ".." }

@@ -38,6 +38,10 @@ pub enum Cmd {
     /// `detail` is the live moment in words — "calling gemma4:12b (step 2)",
     /// "applied inspect" — so a long model call is never a silent pulse.
     Status { working: bool, background: bool, detail: String },
+    /// A journal line from a peer (src/sync.rs): applied only if it is the next
+    /// event in `origin`'s log, then journaled with its origin tag — so merged
+    /// history replays on the next boot exactly like local history.
+    Sync { origin: String, seq: u64, kind: String, payload: String },
 }
 
 /// Wall-clock milliseconds — a BOUNDARY fact (§9.8): raw events are stamped here as
@@ -62,8 +66,8 @@ const JOURNAL: &str = "data/journal.jsonl";
 /// shared things are the binary, the skills directory, and the demo-data files.
 /// The pre-projects journal keeps living at data/journal.jsonl as "default";
 /// every other project journals under data/projects/<slug>/.
-type ProjectHandle = (Sender<Cmd>, Arc<std::sync::atomic::AtomicUsize>);
-type Projects = Arc<Mutex<HashMap<String, ProjectHandle>>>;
+pub(crate) type ProjectHandle = (Sender<Cmd>, Arc<std::sync::atomic::AtomicUsize>);
+pub(crate) type Projects = Arc<Mutex<HashMap<String, ProjectHandle>>>;
 
 /// Normalize a user-supplied project name to a stable slug.
 fn project_slug(raw: &str) -> String {
@@ -117,6 +121,20 @@ fn prettify(slug: &str) -> String {
         Some(f) => f.to_uppercase().collect::<String>() + ch.as_str(),
         None => "Project".into(),
     }
+}
+
+/// The sync engine's views of the same facts, crate-visible under stable names.
+#[cfg(feature = "sync")]
+pub(crate) fn journal_path(slug: &str) -> String {
+    project_journal(slug)
+}
+#[cfg(feature = "sync")]
+pub(crate) fn all_project_slugs() -> Vec<String> {
+    list_projects()
+}
+#[cfg(feature = "sync")]
+pub(crate) fn project_handle(slug: &str, projects: &Projects) -> ProjectHandle {
+    project_tx(&project_slug(slug), projects)
 }
 
 /// Every project that exists on disk (has a journal), plus the default.
@@ -212,6 +230,11 @@ pub fn serve(addr: &str) -> std::io::Result<()> {
     // the default project boots eagerly (it's the one with the demo mounts);
     // every other project boots on the first client that asks for it
     project_tx("default", &projects);
+
+    // built with `--features sync`: bring up the iroh endpoint and reconcile
+    // journals with every listed peer (src/sync.rs)
+    #[cfg(feature = "sync")]
+    crate::sync::net::spawn(projects.clone());
 
     let listener = TcpListener::bind(addr)?;
     println!("twin serve — open http://{addr}");
@@ -311,10 +334,17 @@ fn graph_loop(
 
     // Replay the journal: the twin REMEMBERS.  Same code paths as live traffic, so
     // the replay is exact; no clients are connected yet, so nothing is broadcast.
+    // Merged peer lines replay too; their origin tags rebuild the dedupe cursor —
+    // how far into each peer's log this journal already reaches (src/sync.rs).
     let mut replayed = 0usize;
+    let mut synced: HashMap<String, u64> = HashMap::new();
     if let Ok(text) = std::fs::read_to_string(&journal_file) {
         for line in text.lines() {
             let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+            if let (Some(o), Some(s)) = (v["o"].as_str(), v["s"].as_u64()) {
+                let e = synced.entry(o.to_string()).or_insert(0);
+                *e = (*e).max(s + 1);
+            }
             match (v["k"].as_str(), v["p"].as_str()) {
                 (Some("ev"), Some(p)) => {
                     apply_event(&mut g, p);
@@ -397,6 +427,32 @@ fn graph_loop(
                 })
                 .to_string();
                 clients.retain(|c| c.send(msg.clone()).is_ok());
+            }
+            Cmd::Sync { origin, seq, kind, payload } => {
+                // only the NEXT event of an origin's log is accepted: logs stay
+                // contiguous, duplicates fall out, gaps heal on a later round
+                let next = synced.entry(origin.clone()).or_insert(0);
+                if seq != *next {
+                    continue;
+                }
+                *next += 1;
+                match kind.as_str() {
+                    "ev" => {
+                        apply_event(&mut g, &payload);
+                        note_pause(&paused, &payload);
+                        let msg = twin_state_msg(&paused);
+                        clients.retain(|c| c.send(msg.clone()).is_ok());
+                    }
+                    // a peer's effects already ran THERE; here they stop at the
+                    // boundary, exactly like a boot replay (§8)
+                    "tool" => dispatch_tool(&mut g, &mut embeds, &payload, true),
+                    _ => continue,
+                }
+                if let Some(f) = &mut journal {
+                    let line = serde_json::json!({ "k": kind, "p": payload, "o": origin, "s": seq }).to_string();
+                    let _ = writeln!(f, "{line}");
+                }
+                broadcast_new(&mut g, &mut cursor, &mut clients);
             }
         }
     }

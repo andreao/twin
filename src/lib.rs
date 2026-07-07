@@ -29,6 +29,7 @@ pub mod runtime;
 pub mod server;
 pub mod skills;
 pub mod source;
+pub mod sync;
 pub mod witsml;
 pub mod ws;
 pub mod xlsx;
