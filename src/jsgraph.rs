@@ -54,6 +54,30 @@ struct MountWatch {
     /// mounted-partial: the graph holds a bounded prefix; growth only moves the
     /// counts, it does not stream rows (residence policy stays the user's call)
     partial: bool,
+    /// the boundary lens's REFRESH POLICY (§9.9): how often this mount may be
+    /// looked at.  0 = live (every beat), u64::MAX = manual (a remount refreshes),
+    /// else a floor in ms between polls.
+    refresh: u64,
+    /// when it was last looked at (boundary wall-clock, ms)
+    last_poll: u64,
+}
+
+/// Parse a refresh policy: "live" (default) · "30s"/"5m"/"2h" · "manual"/"open".
+/// Unknown text reads as live — a bad policy must never silence a source.
+fn parse_refresh(s: &str) -> u64 {
+    let t = s.trim().to_lowercase();
+    if t.is_empty() || t == "live" {
+        return 0;
+    }
+    if ["manual", "open", "off", "once"].contains(&t.as_str()) {
+        return u64::MAX;
+    }
+    for (suffix, unit) in [("ms", 1u64), ("s", 1000), ("m", 60_000), ("h", 3_600_000)] {
+        if let Some(n) = t.strip_suffix(suffix).and_then(|v| v.trim().parse::<u64>().ok()) {
+            return n.saturating_mul(unit);
+        }
+    }
+    0
 }
 
 impl JsGraph {
@@ -235,6 +259,12 @@ impl JsGraph {
         self.call(&format!("T.mountSource({name:?}, {meta}, {rows_json})"));
     }
 
+    /// One beat of boundary time into the graph (§9.8: the wall clock crosses at
+    /// the boundary, never computed in-graph): due interval-refresh views redraw.
+    pub fn twin_tick(&mut self, now: u64) {
+        self.call(&format!("T.tick({now})"));
+    }
+
     /// Log one step into the agent's activity log (§12.3) from a host-side effect,
     /// so slow boundary work (OCR, search) reports back the same way JS tools do.
     pub fn twin_log_step(&mut self, kind: &str, text: &str, detail: &str, subject: &str, tone: &str) {
@@ -253,6 +283,12 @@ impl JsGraph {
     /// The file remains the source of truth — and stays WATCHED: growth streams in
     /// (see `twin_poll_mounts`).  Returns a short status for dev logs.
     pub fn twin_read_source(&mut self, name: &str, path: &str, mode: &str) -> String {
+        self.twin_read_source_with(name, path, mode, "")
+    }
+
+    /// The full form: `refresh` is the mount's boundary refresh policy ("live",
+    /// "30s", "manual", …) — how often the watch may look at the file.
+    pub fn twin_read_source_with(&mut self, name: &str, path: &str, mode: &str, refresh: &str) -> String {
         let cap = materialize_cap();
         match crate::source::read_file(path) {
             Ok(rows) => {
@@ -283,6 +319,8 @@ impl JsGraph {
                         rows_seen: total,
                         len,
                         partial: total > take,
+                        refresh: parse_refresh(refresh),
+                        last_poll: 0,
                     });
                 }
                 format!("mounted {name}: {total} rows ({residence})")
@@ -298,14 +336,20 @@ impl JsGraph {
     /// the graph as a +delta (the same path any adapter delta takes — open views
     /// patch incrementally).  A stat per file when nothing changed; a re-read only
     /// on growth.  Partial mounts move their counts, not their rows (§15.1).
-    /// Returns one status line per source that changed.
-    pub fn twin_poll_mounts(&mut self) -> Vec<String> {
+    /// Returns one status line per source that changed.  `now` is boundary
+    /// wall-clock (ms) — each watch is looked at no more often than its own
+    /// refresh policy allows.
+    pub fn twin_poll_mounts(&mut self, now: u64) -> Vec<String> {
         let mut out = Vec::new();
         for i in 0..self.watches.len() {
             let (name, path, rows_seen, len, partial) = {
                 let w = &self.watches[i];
+                if w.refresh == u64::MAX || now.saturating_sub(w.last_poll) < w.refresh {
+                    continue; // this boundary's policy says: not yet
+                }
                 (w.name.clone(), w.path.clone(), w.rows_seen, w.len, w.partial)
             };
+            self.watches[i].last_poll = now;
             let Ok(md) = std::fs::metadata(&path) else { continue };
             if md.len() == len {
                 continue;
@@ -368,5 +412,24 @@ impl JsGraph {
     }
     pub fn visible_rows(&mut self) -> serde_json::Value {
         serde_json::from_str(&self.call("M.visibleRows()")).unwrap_or(serde_json::Value::Null)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_refresh;
+
+    #[test]
+    fn refresh_policies_parse() {
+        assert_eq!(parse_refresh(""), 0);
+        assert_eq!(parse_refresh("live"), 0);
+        assert_eq!(parse_refresh("300ms"), 300);
+        assert_eq!(parse_refresh("30s"), 30_000);
+        assert_eq!(parse_refresh("5m"), 300_000);
+        assert_eq!(parse_refresh("2h"), 7_200_000);
+        assert_eq!(parse_refresh("manual"), u64::MAX);
+        assert_eq!(parse_refresh("OPEN"), u64::MAX);
+        // a bad policy must never silence a source: unknown reads as live
+        assert_eq!(parse_refresh("whenever"), 0);
     }
 }

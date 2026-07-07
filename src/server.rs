@@ -313,7 +313,8 @@ fn graph_loop(
                 if name.is_empty() || path.is_empty() || !std::path::Path::new(path).exists() {
                     continue;
                 }
-                let status = g.twin_read_source(name, path, residence);
+                let refresh = entry["refresh"].as_str().unwrap_or("");
+                let status = g.twin_read_source_with(name, path, residence, refresh);
                 println!("{status}");
                 // human title/description come from the manifest too — folded in as a
                 // describe event, the same path the agent uses (§8: everything is events)
@@ -373,9 +374,13 @@ fn graph_loop(
     // quiet, appended rows streamed in as +deltas when a file grew (§9.9 live).
     let mut last_poll = std::time::Instant::now();
     let poll_mounts = |g: &mut JsGraph, cursor: &mut usize, clients: &mut Vec<Sender<String>>| {
-        for line in g.twin_poll_mounts() {
+        let now = now_ms();
+        for line in g.twin_poll_mounts(now) {
             println!("[stream] {line}");
         }
+        // the same beat carries boundary time into the graph: interval-refresh
+        // views (a dashboard embed with refresh:"30s") redraw when due
+        g.twin_tick(now);
         broadcast_new(g, cursor, clients);
     };
 
@@ -522,11 +527,12 @@ pub fn dispatch_tool(g: &mut JsGraph, embeds: &mut crate::embed::EmbedStore, jso
             let args = &parsed.as_ref().unwrap()["args"];
             let path = args["path"].as_str().unwrap_or("").trim().to_string();
             let mode = args["mode"].as_str().unwrap_or("mounted").to_string();
+            let refresh = args["refresh"].as_str().unwrap_or("").to_string();
             if path.is_empty() {
                 return;
             }
             let name = source_name(&path);
-            let status = g.twin_read_source(&name, &path, &mode);
+            let status = g.twin_read_source_with(&name, &path, &mode, &refresh);
             eprintln!("[read_source] {status}");
         }
         "read_document" => {

@@ -955,9 +955,15 @@ const T = (() => {
       }
       // open aggregate views (calendar, board, histogram…) redraw whole — they
       // are bounded DOM by construction, so a redraw is a screenful, not a scan;
-      // a dashboard subscribes to EVERY source its embedded views read
+      // a dashboard subscribes to EVERY source its embedded views read, each at
+      // that embed's own refresh policy (live now, interval when due, snapshot never)
       for (const [, v] of [...liveViews]) {
-        if (v.id === id || (v.ids && v.ids.has(id))) v.rerender();
+        const p = v.policies
+          ? (v.ids && v.ids.has(id) ? v.policies.get(id) : undefined)
+          : (v.id === id ? (v.policy || 0) : undefined);
+        if (p === undefined || p === Infinity) continue;
+        if (p === 0) { v.rerender(); continue; }
+        v.dirtyAt = Math.min(v.dirtyAt == null ? Infinity : v.dirtyAt, (v.last || 0) + p);
       }
     });
   }
@@ -1088,6 +1094,29 @@ const T = (() => {
     flushPara();
   }
 
+  // ---- refresh policies (§9.9 for compositions): every embed says how fresh it
+  // needs its source.  0 = live (redraw on every delta), a number = at most that
+  // often (deltas mark it dirty; the boundary tick redraws when due), Infinity =
+  // a snapshot (redraws only when the page reopens).  Unknown reads as live —
+  // a bad policy must never freeze a view.
+  function parsePolicy(v) {
+    const t = String(v == null ? '' : v).trim().toLowerCase();
+    if (!t || t === 'live') return 0;
+    if (['open', 'manual', 'once', 'off', 'snapshot'].includes(t)) return Infinity;
+    const m = /^(\d+)\s*(ms|s|m|h)$/.exec(t);
+    if (m) return Number(m[1]) * { ms: 1, s: 1000, m: 60000, h: 3600000 }[m[2]];
+    return 0;
+  }
+  // boundary time, as last carried in by a tick or a stamped event — the graph
+  // never asks a clock of its own (§9.8)
+  let bnow = 0;
+  function tick(now) {
+    bnow = Math.max(bnow, Number(now) || 0);
+    for (const [, v] of [...liveViews]) {
+      if (v.dirtyAt != null && bnow >= v.dirtyAt) v.rerender();
+    }
+  }
+
   // what a view block (or a show call) may name, and what it means here
   const EMBED_ALIAS = {
     table: 'table',
@@ -1135,7 +1164,7 @@ const T = (() => {
     }
     if (seen) {
       const id = sourceIds.get(srcName);
-      if (id !== undefined) seen.push(id);
+      if (id !== undefined) seen.push({ id, policy: parsePolicy(a.refresh) });
     }
   }
 
@@ -1185,8 +1214,18 @@ const T = (() => {
     V.add('div', 'exp:dash', null, i);
     const seen = [];
     renderMarkdownInto(V.key('exp:dash'), V.key('exp:dash') + ':v', d.body, seen);
-    liveViews.set(V.panel, { ids: new Set(seen), dash: slug, rerender: () => openSource(slug, '', V.panel) });
-    seen.forEach(observeTableNode);
+    // per SOURCE, the most eager embed's policy wins (the page redraws whole,
+    // so one live embed of a source makes that source live for the page)
+    const policies = new Map();
+    for (const { id, policy } of seen) {
+      policies.set(id, Math.min(policies.has(id) ? policies.get(id) : Infinity, policy));
+    }
+    liveViews.set(V.panel, {
+      ids: new Set(policies.keys()), policies, dash: slug,
+      last: bnow, dirtyAt: null,
+      rerender: () => openSource(slug, '', V.panel),
+    });
+    for (const id of policies.keys()) observeTableNode(id);
   }
 
   // ---- calendar: rows bucketed per day on their date field, the last months
@@ -1421,7 +1460,7 @@ const T = (() => {
     AGG_VIEWS[mode](V.key('exp:agg'), V.key('exp:agg') + ':v', name, {});
     const id = sourceIds.get(name);
     if (id !== undefined) {
-      liveViews.set(V.panel, { id, rerender: () => openSource(name, mode, V.panel) });
+      liveViews.set(V.panel, { id, policy: 0, last: bnow, dirtyAt: null, rerender: () => openSource(name, mode, V.panel) });
       observeTableNode(id);
     }
   }
@@ -2751,6 +2790,7 @@ const T = (() => {
     // and touches neither the raw input stream nor the journal (like mouse
     // position, it re-derives from the next scroll — replaying it means nothing)
     if (e.type === 'viewport') { tableViewport(e); return; }
+    if (e.ts) bnow = Math.max(bnow, Number(e.ts) || 0); // boundary-stamped time rides in
     inputSeq += 1;
     const raw = Object.assign({ seq: inputSeq, ts: 0 }, e);
     G.submit(inputSrc, ZSet.fromRows([rec(raw)]), { author: 'user', origin: 'ui', note: 'raw' });
@@ -2917,7 +2957,7 @@ const T = (() => {
   }
 
   return {
-    agentTool, event, perceive, mountSource, sourceError, installSkill, appendRows,
+    agentTool, event, perceive, mountSource, sourceError, installSkill, appendRows, tick,
     chartSeries, chartMessage, chartInline, chartInlineMessage,
     // host-side effects (OCR, search, fetches) report into the same activity log
     log(kind, text, detail, subject, tone) { logStep(kind, text, { detail, subject, tone }); },
