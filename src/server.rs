@@ -35,7 +35,9 @@ pub enum Cmd {
     Perceive(Sender<String>),
     /// The agent's working state, surfaced to the UI: foreground turns show the
     /// in-feed "thinking…" indicator, background turns pulse the agent rail.
-    Status { working: bool, background: bool },
+    /// `detail` is the live moment in words — "calling gemma4:12b (step 2)",
+    /// "applied inspect" — so a long model call is never a silent pulse.
+    Status { working: bool, background: bool, detail: String },
 }
 
 /// Wall-clock milliseconds — a BOUNDARY fact (§9.8): raw events are stamped here as
@@ -256,6 +258,9 @@ fn graph_loop(
     with_manifest: bool,
 ) {
     let mut g = JsGraph::new_twin();
+    // this project's semantic index (chunks embedded by the local model, §9.14 note)
+    let _ = std::fs::create_dir_all("data/models");
+    let mut embeds = crate::embed::EmbedStore::open(&format!("data/models/embeddings-{project}.jsonl"));
 
     // Core skills-loader (§4.1, §11.13): seed the twin's skill registry from the static
     // `skills/` directory on startup, so the agent knows what capabilities it has.
@@ -316,7 +321,7 @@ fn graph_loop(
                     note_pause(&paused, p);
                     replayed += 1;
                 }
-                (Some("tool"), Some(p)) => { dispatch_tool(&mut g, p); replayed += 1; }
+                (Some("tool"), Some(p)) => { dispatch_tool(&mut g, &mut embeds, p); replayed += 1; }
                 _ => {}
             }
         }
@@ -379,17 +384,18 @@ fn graph_loop(
                 }
             }
             Cmd::AgentTool(json) => {
-                dispatch_tool(&mut g, &json);
+                dispatch_tool(&mut g, &mut embeds, &json);
                 journal_append(&mut journal, "tool", &json);
                 broadcast_new(&mut g, &mut cursor, &mut clients);
             }
             Cmd::Perceive(reply) => {
                 reply.send(g.twin_perceive()).ok();
             }
-            Cmd::Status { working, background } => {
-                let msg = format!(
-                    "{{\"type\":\"status\",\"working\":{working},\"background\":{background}}}"
-                );
+            Cmd::Status { working, background, detail } => {
+                let msg = serde_json::json!({
+                    "type": "status", "working": working, "background": background, "detail": detail,
+                })
+                .to_string();
                 clients.retain(|c| c.send(msg.clone()).is_ok());
             }
         }
@@ -397,9 +403,10 @@ fn graph_loop(
 }
 
 /// Apply an agent tool-call. Pure workspace tools (think/say/ask/record_profile) go
-/// straight to the V8 graph; effectful ones (read_source, §9.9) are handled in Rust
-/// because they touch the outside world, then land their result back as graph edits.
-fn dispatch_tool(g: &mut JsGraph, json: &str) {
+/// straight to the V8 graph; effectful ones (read_source, read_document, search,
+/// §9.9) are handled in Rust because they touch the outside world (files, the OCR
+/// and embedding models), then land their result back as graph edits.
+fn dispatch_tool(g: &mut JsGraph, embeds: &mut crate::embed::EmbedStore, json: &str) {
     let parsed: Option<serde_json::Value> = serde_json::from_str(json).ok();
     let tool = parsed.as_ref().and_then(|v| v["tool"].as_str()).unwrap_or("");
     let show_chart = tool == "show"
@@ -436,8 +443,81 @@ fn dispatch_tool(g: &mut JsGraph, json: &str) {
             let status = g.twin_read_source(&name, &path, &mode);
             eprintln!("[read_source] {status}");
         }
+        "read_document" => {
+            let args = &parsed.as_ref().unwrap()["args"];
+            let name = ["name", "path", "source"]
+                .iter()
+                .find_map(|k| args[*k].as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if name.is_empty() {
+                return;
+            }
+            let src = format!("doc:{}", source_name(&name));
+            match crate::doc::read(&name) {
+                Ok(d) => {
+                    g.twin_mount_rows(&src, &d.rows, &format!("document {name}"));
+                    let via = if d.ocr_pages > 0 {
+                        format!("{} page(s) OCR'd by the vision model", d.ocr_pages)
+                    } else {
+                        "from the text layer".into()
+                    };
+                    let mut detail = format!(
+                        "{} text block(s) {via}{}",
+                        d.rows.len(),
+                        if d.cached { " · cached" } else { "" }
+                    );
+                    if !embeds.has(&src) {
+                        let blocks: Vec<String> = d
+                            .rows
+                            .iter()
+                            .filter_map(|r| r["text"].as_str().map(String::from))
+                            .collect();
+                        match embeds.add_document(&src, &blocks) {
+                            Ok(n) if n > 0 => detail.push_str(&format!(" · {n} chunks embedded for search")),
+                            Ok(_) => {}
+                            Err(e) => detail.push_str(&format!(" · not embedded ({e})")),
+                        }
+                    }
+                    g.twin_log_step("read", &name, &detail, &src, "");
+                }
+                Err(e) => g.twin_log_step("failed", &name, &e, &src, "error"),
+            }
+        }
+        "search" => {
+            let args = &parsed.as_ref().unwrap()["args"];
+            let q = args["query"].as_str().or_else(|| args["text"].as_str()).unwrap_or("").trim().to_string();
+            if q.is_empty() {
+                return;
+            }
+            if embeds.is_empty() {
+                g.twin_log_step("failed", &q, "nothing is embedded yet — read_document a report first", "search", "warn");
+                return;
+            }
+            match embeds.search(&q, 6) {
+                Ok(hits) => {
+                    let lines: Vec<String> = hits
+                        .iter()
+                        .map(|h| format!("[{} {:.2}] {}", h.source, h.score, snippet(&h.text, 180)))
+                        .collect();
+                    g.twin_log_step("searched", &q, &lines.join("  |  "), "search", "");
+                }
+                Err(e) => g.twin_log_step("failed", &q, &e, "search", "error"),
+            }
+        }
         _ => g.twin_agent_tool(json),
     }
+}
+
+/// The first `n` characters, single-line, with an ellipsis when cut.
+fn snippet(text: &str, n: usize) -> String {
+    let one: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one.chars().count() <= n {
+        return one;
+    }
+    let cut: String = one.chars().take(n).collect();
+    format!("{cut}…")
 }
 
 /// A short, stable source name from a file path (basename without extension).

@@ -1,0 +1,11 @@
+Wellbore           Surface            MD      TVD
+NO 15/9-F-14       Seabed             91.0    91.0
+NO 15/9-F-14       Utsira Fm. Top     712.4   701.9
+NO 15/9-F-14       Hugin Fm. Top      2113.0  1852.9
+NO 15/9-F-14       Hugin Fm. Base     2195.0  1912.7
+NO 15/9-F-14       Skagerrak Fm. Top  2204.5  1919.6
+NO 15/9-F-15       Seabed             89.5    89.5
+NO 15/9-F-15       Utsira Fm. Top     698.2   690.4
+NO 15/9-F-15       Hugin Fm. Top      2542.0  2098.4
+NO 15/9-F-15       Hugin Fm. Base     2631.5  2170.2
+NO 15/9-F-15       Skagerrak Fm. Top  2647.8  2189.3

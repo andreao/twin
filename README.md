@@ -18,8 +18,22 @@ in V8 (§11.11).
   perceives the graph as a structured projection (§12.3) and acts by emitting
   tool-calls that become graph edits (§12.1). A model call is one governed slow
   effect (§9.8) — an HTTP call to a **local** model (Ollama), driven by our own
-  prompt-based tool protocol so it stays model-agnostic. Tools so far: `think`,
-  `say`, `ask`, `record_profile`, `read_source`.
+  prompt-based tool protocol so it stays model-agnostic. It works between
+  conversations too: quiet periods become background turns (profiling sources,
+  annotating fields, authoring lenses, keeping its agenda), backing off when idle.
+  Its tools cover conversation, rendering live views inline, mounting and
+  profiling sources, authoring lenses, reading documents, semantic search over
+  what it read, and running its own agenda.
+- **Schema inference on mount.** Every source is statistically profiled as it
+  mounts (types, keys, cross-source references, enums, patterns); the agent layers
+  on the semantics the statistics can't know, so joins land on the right keys.
+- **Industrial formats mount as rows.** Beyond CSV/JSON, the boundary readers
+  flatten WITSML and EDM XML, LAS well logs, xlsx workbooks and fixed-width
+  listings — hand-rolled, still zero deps. Documents climb a ladder: PDF text
+  layer, else page images read by the local vision model (OCR); the text is
+  embedded locally for semantic search. Linking stays deterministic (§8.1): lens
+  code gets `normalizeWell` and `inInterval`, so well names and depth intervals
+  reconcile across systems — no similarity scores.
 - **Data residence spectrum (§7 / §9.9 / §15.1).** "All data is *in the twin*" is a
   *logical* guarantee: a source is **mounted** (federated — a boundary adapter over the
   external file, no copy) by default, and *could* be extracted / selectively synced /
@@ -55,7 +69,7 @@ The split, faithful to §4.1's trusted kernel:
   crosses into V8 only coarsely (per submit / per poll), at the adapter/host seam
   where serialization belongs.
 
-## What runs (45 Rust tests: `cargo test`)
+## What runs (146 Rust tests: `cargo test`)
 
 | Subsystem | §ref | Where | Status |
 |---|---|---|---|
@@ -72,6 +86,9 @@ The split, faithful to §4.1's trusted kernel:
 | Scheduler (early cutoff, echo, outbox) | §9.6 | V8/JS | ✓ glitch-free topo order; join bilinear fix |
 | Boundary adapter (poll+diff, write-through) | §9.9 | Rust | ✓ manufactured edit stream; echo-suppressed |
 | Incremental `<Table>` (virtualized) | §11.7 | V8/JS | ✓ minimal mutations, stable keys |
+| Schema inference (profile + annotate) | §12.3 | V8/JS | ✓ types, keys, references, enums, patterns |
+| Industrial format readers | §9.9, §8.1 | Rust | ✓ WITSML/EDM XML, LAS, xlsx, fixed-width, zip+inflate |
+| Documents: PDF text → OCR → search | §9.8, §9.9 | Rust | ✓ text layer, vision-model OCR ladder, local embeddings |
 | **§18 first-milestone loop, end-to-end** | §18 | Rust+V8 | ✓ DB→lenses→join→Table + backward round-trip |
 
 ## Run it
@@ -93,23 +110,15 @@ median **0** mutations/edit, **1** per visible change.
 ## Layout
 
 ```
-design_doc.md              the specification
-Cargo.toml
-src/
-  hashing.rs definitions.rs   content addressing + namespace (§4, C2)
-  runtime.rs                  raw-V8 host: branches, governed effects, hot-swap (§6, §14)
-  engine.rs                   incremental engine, early cutoff (§3, C1)
-  pmap.rs layers.rs           persistent map + layered store + 0-copy branches (§7, C7)
-  adapter.rs                  boundary adapter: mock DB + poll/diff + write-through (§9.9)
-  jsgraph.rs                  Rust host that drives the V8-resident dataflow graph
-  server.rs ws.rs             twin serve: V8 graph on one thread + hand-rolled WebSocket
-  agent.rs                    the agent harness: perceive → local model → tool-calls (§12)
-  source.rs                   file boundary reader (CSV/JSON/JSONL) — mount as a source (§9.9)
-  bin/serve.rs                the `serve` entry point
-  js/                         the dataflow graph + app, as content-addressed JS in V8
-    zset.js graph.js table.js milestone.js   Z-sets, lenses+scheduler, table, §18 app
-    views.js twin.js                         workspace components + the twin app graph
-web/index.html                the thin client (vanilla JS: apply mutations, send events)
-examples/  milestone.rs bench.rs
-tests/     substrate.rs dataflow.rs milestone.rs twin_perceive.rs twin_mount.rs
+design_doc.md   the specification — section references (§) throughout the code point here
+src/            the Rust kernel: content addressing, the raw-V8 host, the incremental
+                engine, layered store + branches, boundary adapters (local files,
+                external APIs), the serve server, and the agent harness
+src/js/         the dataflow graph + twin app, as content-addressed JS running in V8
+web/            the thin client (vanilla JS: apply mutations, send events back)
+skills/         agent skills, discovered at startup
+data/           mounted project data (Valhall snapshot, Volve drilling samples, AIS)
+                + journal.jsonl, the event log
+examples/       the §18 milestone loop and the §17 benchmarks
+tests/          integration tests (substrate, dataflow, agent perception, schema, protobuf)
 ```

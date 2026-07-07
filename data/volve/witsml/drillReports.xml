@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<drillReports xmlns="http://www.witsml.org/schemas/1series" version="1.4.1.1">
+  <drillReport uidWell="W-15-9-F-14" uidWellbore="WB-15-9-F-14" uid="dr-2008-03-12">
+    <nameWell>NO 15/9-F-14</nameWell>
+    <nameWellbore>NO 15/9-F-14 A</nameWellbore>
+    <dTimStart>2008-03-12T00:00:00Z</dTimStart>
+    <dTimEnd>2008-03-13T00:00:00Z</dTimEnd>
+    <mdReport uom="m">2050.0</mdReport>
+    <activity>
+      <dTimStart>2008-03-12T00:00:00Z</dTimStart>
+      <dTimEnd>2008-03-12T06:30:00Z</dTimEnd>
+      <proprietaryCode>DRL</proprietaryCode>
+      <mdHoleStart uom="m">1890.0</mdHoleStart>
+      <mdHoleEnd uom="m">1985.0</mdHoleEnd>
+      <comments>Drilled 12 1/4 in section from 1890 m to 1985 m, ROP averaging 14.6 m/h. Slight losses at 1962 m, cured with LCM sweep.</comments>
+    </activity>
+    <activity>
+      <dTimStart>2008-03-12T06:30:00Z</dTimStart>
+      <dTimEnd>2008-03-12T09:00:00Z</dTimEnd>
+      <proprietaryCode>CIRC</proprietaryCode>
+      <mdHoleStart uom="m">1985.0</mdHoleStart>
+      <mdHoleEnd uom="m">1985.0</mdHoleEnd>
+      <comments>Circulated bottoms up, shakers clean. Mud weight raised 1.42 to 1.46 sg.</comments>
+    </activity>
+    <activity>
+      <dTimStart>2008-03-12T09:00:00Z</dTimStart>
+      <dTimEnd>2008-03-13T00:00:00Z</dTimEnd>
+      <proprietaryCode>DRL</proprietaryCode>
+      <mdHoleStart uom="m">1985.0</mdHoleStart>
+      <mdHoleEnd uom="m">2050.0</mdHoleEnd>
+      <comments>Resumed drilling to 2050 m. Background gas 1.8 percent, connection gas peaks 3.2 percent.</comments>
+    </activity>
+    <commonData><dTimCreation>2008-03-13T04:00:00Z</dTimCreation></commonData>
+  </drillReport>
+  <drillReport uidWell="W-15-9-F-14" uidWellbore="WB-15-9-F-14" uid="dr-2008-03-13">
+    <nameWell>NO 15/9-F-14</nameWell>
+    <nameWellbore>NO 15/9-F-14 A</nameWellbore>
+    <dTimStart>2008-03-13T00:00:00Z</dTimStart>
+    <dTimEnd>2008-03-14T00:00:00Z</dTimEnd>
+    <mdReport uom="m">2145.0</mdReport>
+    <activity>
+      <dTimStart>2008-03-13T00:00:00Z</dTimStart>
+      <dTimEnd>2008-03-13T14:00:00Z</dTimEnd>
+      <proprietaryCode>DRL</proprietaryCode>
+      <mdHoleStart uom="m">2050.0</mdHoleStart>
+      <mdHoleEnd uom="m">2145.0</mdHoleEnd>
+      <comments>Drilled ahead to 2145 m entering the Hugin formation at 2113 m as prognosed. ROP dropped to 8.2 m/h in sandstone stringers.</comments>
+    </activity>
+    <activity>
+      <dTimStart>2008-03-13T14:00:00Z</dTimStart>
+      <dTimEnd>2008-03-13T20:00:00Z</dTimEnd>
+      <proprietaryCode>TRIP</proprietaryCode>
+      <mdHoleStart uom="m">2145.0</mdHoleStart>
+      <mdHoleEnd uom="m">2145.0</mdHoleEnd>
+      <comments>Tripped for new PDC bit after torque fluctuations; bit graded 4-6-WT.</comments>
+    </activity>
+    <activity>
+      <dTimStart>2008-03-13T20:00:00Z</dTimStart>
+      <dTimEnd>2008-03-14T00:00:00Z</dTimEnd>
+      <proprietaryCode>BHA</proprietaryCode>
+      <mdHoleStart uom="m">2145.0</mdHoleStart>
+      <mdHoleEnd uom="m">2145.0</mdHoleEnd>
+      <comments>Made up BHA run 7 with stabilized motor assembly, RIH to 1900 m.</comments>
+    </activity>
+    <commonData><dTimCreation>2008-03-14T04:00:00Z</dTimCreation></commonData>
+  </drillReport>
+  <drillReport uidWell="W-15-9-F-14" uidWellbore="WB-15-9-F-14" uid="dr-2008-03-14">
+    <nameWell>NO 15/9-F-14</nameWell>
+    <nameWellbore>NO 15/9-F-14 A</nameWellbore>
+    <dTimStart>2008-03-14T00:00:00Z</dTimStart>
+    <dTimEnd>2008-03-15T00:00:00Z</dTimEnd>
+    <mdReport uom="m">2210.0</mdReport>
+    <activity>
+      <dTimStart>2008-03-14T00:00:00Z</dTimStart>
+      <dTimEnd>2008-03-14T18:00:00Z</dTimEnd>
+      <proprietaryCode>DRL</proprietaryCode>
+      <mdHoleStart uom="m">2145.0</mdHoleStart>
+      <mdHoleEnd uom="m">2210.0</mdHoleEnd>
+      <comments>Drilled through the Hugin sand to section TD at 2210 m. Good reservoir shows from 2113 m to 2195 m.</comments>
+    </activity>
+    <activity>
+      <dTimStart>2008-03-14T18:00:00Z</dTimStart>
+      <dTimEnd>2008-03-15T00:00:00Z</dTimEnd>
+      <proprietaryCode>LOG</proprietaryCode>
+      <mdHoleStart uom="m">2210.0</mdHoleStart>
+      <mdHoleEnd uom="m">2210.0</mdHoleEnd>
+      <comments>Rigged up wireline and ran triple combo over the reservoir section.</comments>
+    </activity>
+    <commonData><dTimCreation>2008-03-15T04:00:00Z</dTimCreation></commonData>
+  </drillReport>
+</drillReports>

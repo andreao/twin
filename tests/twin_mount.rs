@@ -475,7 +475,11 @@ fn agent_page_shows_agenda_and_activity_tidily() {
     g.twin_agent_tool(r#"{"tool":"work","args":{"task":"profile","text":"profiling turbines: ranges look sane"}}"#);
     g.twin_event(r#"{"type":"open_agent","panel":0}"#);
     let d = g.twin_from(0);
-    assert!(d.contains("Plan"), "no plan section: {d}");
+    // one list: the live now-line on top (the client mirrors the harness's status
+    // into it while the agent computes), then the plan items — no section headers
+    assert!(d.contains("agent-live"), "no live now line: {d}");
+    assert!(d.contains("last: "), "now line has no between-turns text: {d}");
+    assert!(!d.contains(r#""text":"Now""#) && !d.contains(r#""text":"Plan""#), "section headers should be gone: {d}");
     assert!(d.contains("task:1") && d.contains("task:2"), "task rows are not clickable things");
     assert!(d.contains(r#""text":"now""#), "active task not labelled now");
     assert!(d.contains("Recent steps") && d.contains("ranges look sane"), "activity log missing");

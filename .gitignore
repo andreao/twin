@@ -1,4 +1,14 @@
 /target
 **/__pycache__/
 *.pyc
-/data/
+
+# data is the user's, not the repo's: pulled corpora (see skills/*/SKILL.md),
+# derived caches, and the twin's own journals stay local…
+/data/*
+/data/projects/*
+
+# …except the authored Volve drilling samples (test fixtures + offline demo)
+# and the seeded demo project that mounts them
+!/data/volve/
+!/data/projects/
+!/data/projects/volve/

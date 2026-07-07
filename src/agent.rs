@@ -14,19 +14,14 @@
 //! finds nothing worth doing it idles with exponential backoff, so an idle twin
 //! costs (almost) no compute while an active one uses all it can get.
 
-use std::io::{Read, Write};
-use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use crate::ollama;
 use crate::server::Cmd;
-
-/// Ollama endpoint + default model (override the model with `TWIN_MODEL`).
-const OLLAMA_ADDR: &str = "127.0.0.1:11434";
-const DEFAULT_MODEL: &str = "gemma4:12b";
 
 /// A turn runs at most this many tool-calls before yielding, so a misbehaving model
 /// can never loop forever.
@@ -71,13 +66,15 @@ You act by emitting exactly ONE JSON object per turn — no prose outside it, no
 - {"tool":"ask","args":{"question":"...","options":["...","..."]}}  ask ONE focused question; options are quick-picks. Asking is a first-class part of driving: YOU direct the collaboration by asking the human for the judgment, priorities, and domain knowledge only they have. Ask whenever it moves the work forward — just make each question pointed and worth their time. After you ask, you pause for them.
 - {"tool":"show","args":{"view":"table","source":"<name>","columns":["..."],"limit":10,"filter":"...","title":"..."}}  render a REAL component inline in the conversation. view="table" (a data table; columns/limit/filter optional), view="tree" (an equipment hierarchy from a source like assets), view="chart" with "series":"<id from the timeseries source>" (a live line chart of that sensor's datapoints, fetched on demand), or view="document" with "name":"<file>" (a P&ID/drawing/PDF viewer). This is how you present anything data-shaped. Works on lens:* sources too.
 - {"tool":"record_profile","args":{"field":"...","value":"..."}}  save a durable fact about the user (role, goal, industry, data) the moment you learn it — including goals you INFER from their raw actions.
-- {"tool":"read_source","args":{"path":"/absolute/path/to/file.csv"}}  mount a local file (CSV/JSON/JSONL) — federates it (no copy); it then appears in your perception under "sources".
+- {"tool":"read_source","args":{"path":"/absolute/path/to/file.csv"}}  mount a local data file — federates it (no copy); it then appears in your perception under "sources". Formats: CSV/TSV, JSON, JSONL, WITSML XML (drill reports, logs, trajectories, BHA runs), EDM engineering exports, LAS well logs, xlsx workbooks, and fixed-width listings (well picks) — each becomes flat rows automatically.
+- {"tool":"read_document","args":{"name":"<file>.pdf"}}  read a mounted document's TEXT: the PDF text layer when it has one, otherwise the local vision model reads the page images (slow — minutes; do it in background turns). The text lands as source doc:<name> and is embedded for search.
+- {"tool":"search","args":{"query":"..."}}  semantic search across everything read from documents; the best passages land in your activity log for the next turn. Use it to answer questions from reports ("what caused the sidetrack?") with real citations.
 - {"tool":"inspect","args":{"source":"<name>"}}  profile a mounted source: ranges, empties, duplicates. The result lands in your activity log for the next turn.
 - {"tool":"plan","args":{"items":[{"title":"...","description":"..."}]}}  add items to your agenda — your own to-do list, visible to the user. Every item MUST be an object with a short TITLE plus a one-sentence DESCRIPTION of what you intend and why — never a bare string; the task's own page shows both.
 - {"tool":"work","args":{"task":"<id or text>","text":"what you're doing"}}  log progress; marks that agenda item active.
 - {"tool":"done","args":{"task":"<id or text>"}}  mark an agenda item done.
 - {"tool":"finding","args":{"severity":"info"|"warn"|"critical","text":"...","source":"<name>"}}  record a data issue or insight you discovered — it lands on the Findings board and in your work log, NOT in the chat. Write it so a human can act: WHAT is wrong, WHERE, and why it matters. If it is warn or critical and the user should know NOW, follow with a short `say` that TELLS them what you found and why it matters — filing alone tells them nothing. Never re-file one already in "findings".
-- {"tool":"make_lens","args":{"name":"Gearboxes running hot","description":"one sentence: what this shows and why it matters","source":"<name>","code":"return rows.filter(r => ...)"}}  AUTHOR a new lens: pure JavaScript, gets `rows` (array of plain objects) from the source, returns an array of rows. To CROSS-REFERENCE another source, call `table("<name>")` — it returns that source's rows (e.g. `const ev = table("events"); return rows.filter(r => ev.some(e => String(e.assetIds).includes(String(r.id))))`). Other sources exist ONLY through table(); bare names like `events` or `timeseries` are NOT defined. THE FIVE WAYS LENS CODE DIES — avoid them: (1) referencing `events`/`timeseries`/`lens` as bare globals (always `table("events")`); (2) string methods on non-strings — fields can be numbers or null, write `String(r.name).toLowerCase()`; (3) unbalanced parentheses — count them before you emit; (4) `x in array` does NOT test membership — use `array.includes(x)` or `.some()`; (5) hardcoding ids you saw in sample rows — derive them with table() instead. The lens becomes a live derived source with full lineage, shown as a tile on the twin board. NAMING MATTERS: "name" must be a short human title a plant engineer would say (e.g. "Unique asset types", "Sensors without equipment") — NEVER include the word "lens", and always give a real one-sentence description. Lenses COMPOSE: "source" can be another lens (source:"lens:<name>"), and the board shows the full derivation chain. A new lens lands on the board QUIETLY — mention it in the chat (say/show) only when it is genuinely interesting to the user, not for every derivation you try.
+- {"tool":"make_lens","args":{"name":"Gearboxes running hot","description":"one sentence: what this shows and why it matters","source":"<name>","code":"return rows.filter(r => ...)"}}  AUTHOR a new lens: pure JavaScript, gets `rows` (array of plain objects) from the source, returns an array of rows. To CROSS-REFERENCE another source, call `table("<name>")` — it returns that source's rows (e.g. `const ev = table("events"); return rows.filter(r => ev.some(e => String(e.assetIds).includes(String(r.id))))`). Other sources exist ONLY through table(); bare names like `events` or `timeseries` are NOT defined. THE FIVE WAYS LENS CODE DIES — avoid them: (1) referencing `events`/`timeseries`/`lens` as bare globals (always `table("events")`); (2) string methods on non-strings — fields can be numbers or null, write `String(r.name).toLowerCase()`; (3) unbalanced parentheses — count them before you emit; (4) `x in array` does NOT test membership — use `array.includes(x)` or `.some()`; (5) hardcoding ids you saw in sample rows — derive them with table() instead. Two LINKING helpers are in scope: normalizeWell(s) reconciles well names across systems ("NO 15/9-F-14" and "15/9-F-14" join), and inInterval(v, lo, hi) tests a depth or time against an interval — use them to link reports to logs to picks deterministically. The lens becomes a live derived source with full lineage, shown as a tile on the twin board. NAMING MATTERS: "name" must be a short human title a plant engineer would say (e.g. "Unique asset types", "Sensors without equipment") — NEVER include the word "lens", and always give a real one-sentence description. Lenses COMPOSE: "source" can be another lens (source:"lens:<name>"), and the board shows the full derivation chain. A new lens lands on the board QUIETLY — mention it in the chat (say/show) only when it is genuinely interesting to the user, not for every derivation you try.
 - {"tool":"describe","args":{"source":"<name or lens:name>","title":"...","description":"..."}}  give any source or lens a better human title and description. Every tile on the board deserves both.
 - {"tool":"annotate","args":{"source":"<name>","field":"<column>","title":"...","description":"...","ref":"<source it references, optional>"}}  document ONE FIELD: a short human title and a one-sentence description of what it MEANS. The twin already profiles every source statistically the moment it mounts — you see the result as "fields" on each source (types, unique keys, cross-source references, enums, string patterns). Your job is the semantics the statistics cannot know: what the field means in the plant, what a mined pattern encodes (e.g. a tag convention like VAL_##-TT-#####-## — TT is a temperature transmitter), which reference the stats missed. Annotating a source's fields EARLY pays off everywhere: your lenses join on the right keys, tables render human column names, and your own perception gets sharper.
 - {"tool":"idle","args":{}}  background only: nothing worth doing right now.
@@ -139,7 +136,7 @@ fn agent_loop(
     paused: Arc<AtomicBool>,
     attended: Arc<AtomicUsize>,
 ) {
-    let model = std::env::var("TWIN_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+    let model = ollama::model();
     // background work needs BOTH: not paused, and someone actually here
     let is_parked = || paused.load(Ordering::Relaxed) || attended.load(Ordering::Relaxed) == 0;
     let is_paused = || paused.load(Ordering::Relaxed);
@@ -205,7 +202,11 @@ fn agent_loop(
 /// channel before every model call so the user preempts multi-second work instantly.
 fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) -> Outcome {
     let background = mode == Mode::Background;
-    tx.send(Cmd::Status { working: true, background }).ok();
+    // the live moment, in words — the UI's answer to "what is it ACTUALLY doing?"
+    let status = |detail: String| {
+        tx.send(Cmd::Status { working: true, background, detail }).ok();
+    };
+    status(String::from("reading the twin state"));
     let mut thoughts = 0;
     let mut acted = false;
     let mut said = false;
@@ -246,9 +247,9 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
         };
         if thoughts >= 1 {
             let acts = if background {
-                "plan / work / done / inspect / annotate / finding / make_lens / show / record_profile / ask / idle"
+                "plan / work / done / inspect / annotate / finding / make_lens / show / read_document / search / record_profile / ask / idle"
             } else {
-                "say / ask / show / inspect / annotate / plan / finding / make_lens / record_profile / read_source"
+                "say / ask / show / inspect / annotate / plan / finding / make_lens / record_profile / read_source / read_document / search"
             };
             nudge.push_str(&format!(
                 "\n\nYou have ALREADY thought this turn. Your next output MUST be an ACTION tool ({acts}) — NOT think."
@@ -259,12 +260,11 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
                 "\n\nYou ALREADY made that exact tool call this turn — it was applied ONCE and its result is in your context. Do NOT emit it again. Do something DIFFERENT, or end the turn (say / ask / idle).",
             );
         }
-        if let Some(item) = &idle_item {
-            nudge.push_str(&format!(
-                "\n\nYou said idle, but your agenda still has open items — next up: “{item}”. Idle is NOT allowed while the agenda has work. Do a real step on it NOW (inspect / annotate / make_lens / finding / show / work), or mark it done if it truly is."
-            ));
+        if let Some(work) = &idle_item {
+            nudge.push_str(&format!("\n\nYou said idle, but {work} Idle is NOT allowed while named work remains."));
             idle_item = None;
         }
+        status(format!("thinking with {model}…"));
         let content = match call_model(model, &ctx, &nudge) {
             Ok(c) => c,
             Err(e) => {
@@ -282,13 +282,21 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
         });
         let name = tool_name(&tool);
         if name == "idle" {
-            // idling with an open agenda is a model failure, not a fact about the
-            // world — override it (twice) with a hard rail before accepting.
+            // idling while there is NAMED work is a model failure, not a fact about
+            // the world — override it (twice) with a hard rail before accepting.
+            // Named work: an open agenda item, or a source with undocumented fields.
             if idle_overrides < 2 {
-                if let Some(item) = agenda_head(&ctx) {
-                    eprintln!("[agent{}] idle overridden — agenda has: {item}", if background { "·bg" } else { "" });
+                let work = agenda_head(&ctx)
+                    .map(|item| format!(
+                        "your agenda still has open items — next up: “{item}”. Do a real step on it NOW (inspect / annotate / make_lens / finding / show / work), or mark it done if it truly is."
+                    ))
+                    .or_else(|| annotate_nudge(&ctx).map(|_| String::from(
+                        "sources still have fields without a documented meaning. Annotate ONE of them NOW — use the field KEY exactly as it appears in \"fields\" (not its human title), with a short title and one sentence of meaning.",
+                    )));
+                if let Some(w) = work {
+                    eprintln!("[agent{}] idle overridden — {}", if background { "·bg" } else { "" }, &w[..w.len().min(80)]);
                     idle_overrides += 1;
-                    idle_item = Some(item);
+                    idle_item = Some(w);
                     continue;
                 }
             }
@@ -313,6 +321,16 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
             acted = true;
         }
         eprintln!("[agent{}] {name}: {}", if background { "·bg" } else { "" }, preview(&tool));
+        // said BEFORE the tool applies: slow effects (OCR, embedding, a fetch)
+        // run on the graph thread, and this line is what the user watches meanwhile
+        status(match name.as_str() {
+            "read_document" => "reading the document — OCR can take minutes".into(),
+            "search" => "searching the documents".into(),
+            "read_source" => "mounting the source".into(),
+            "make_lens" => "building a lens".into(),
+            "inspect" => "profiling a source".into(),
+            other => format!("applying {other}"),
+        });
         emit(tx, &tool);
         // A turn ends when the agent addresses the user.
         if name == "say" || name == "ask" {
@@ -327,7 +345,14 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
     if !background && !said && !acted {
         emit(tx, &say_json("What would you like to do next?"));
     }
-    tx.send(Cmd::Status { working: false, background }).ok();
+    // the between-turns line: an idle outcome says WHY nothing is happening,
+    // instead of leaving a bare "idle" for the user to wonder about
+    let detail = if !preempted && !acted && !said {
+        String::from("nothing pressing — resting between checks")
+    } else {
+        String::new()
+    };
+    tx.send(Cmd::Status { working: false, background, detail }).ok();
     if preempted {
         Outcome::Preempted
     } else if acted || said {
@@ -358,6 +383,8 @@ fn dedup_key(tool_json: &str) -> String {
         "describe" => format!("describe:{}", s("source")),
         "annotate" => format!("annotate:{}:{}", s("source"), s("field")),
         "read_source" => format!("read_source:{}", s("path")),
+        "read_document" => format!("read_document:{}", if s("name").is_empty() { s("path") } else { s("name") }),
+        "search" => format!("search:{}", s("query").to_lowercase()),
         "record_profile" => format!("record_profile:{}", s("field")),
         _ => tool_json.to_string(),
     }
@@ -426,7 +453,7 @@ fn path_nudge(ctx: &str) -> Option<String> {
         .find(|it| it["kind"] == "user")
         .and_then(|it| it["text"].as_str())?;
     let looks_like_path = last_user.contains('/')
-        && [".csv", ".json", ".jsonl", ".tsv", ".ndjson"]
+        && [".csv", ".json", ".jsonl", ".tsv", ".ndjson", ".xml", ".las", ".xlsx", ".txt", ".dat"]
             .iter()
             .any(|ext| last_user.to_ascii_lowercase().contains(ext));
     if looks_like_path {
@@ -478,76 +505,7 @@ fn call_model(model: &str, ctx: &str, nudge: &str) -> Result<String, String> {
     let user = format!(
         "Current twin state (JSON):\n{ctx}\n\nEmit your next single tool call as one JSON object.{extra}"
     );
-    let body = serde_json::json!({
-        "model": model,
-        "stream": false,
-        // keep the model resident between calls — a cold reload is ~120s on CPU,
-        // a warm call ~20s; the agent makes several calls per turn.
-        "keep_alive": "10m",
-        "options": { "temperature": 0.2 },
-        "messages": [
-            { "role": "system", "content": SYSTEM_PROMPT },
-            { "role": "user", "content": user },
-        ],
-    })
-    .to_string();
-
-    let resp = http_post("/api/chat", &body).map_err(|e| e.to_string())?;
-    let v: serde_json::Value = serde_json::from_str(&resp)
-        .map_err(|e| format!("bad model response: {e}"))?;
-    Ok(v["message"]["content"].as_str().unwrap_or("").to_string())
-}
-
-/// Minimal HTTP/1.1 POST to the local Ollama, returning the decoded body. No deps —
-/// localhost only. Handles Content-Length and chunked transfer-encoding.
-fn http_post(path: &str, body: &str) -> std::io::Result<String> {
-    let mut s = TcpStream::connect(OLLAMA_ADDR)?;
-    let req = format!(
-        "POST {path} HTTP/1.1\r\nHost: {OLLAMA_ADDR}\r\nContent-Type: application/json\r\n\
-         Content-Length: {}\r\nConnection: close\r\n\r\n{}",
-        body.len(),
-        body
-    );
-    s.write_all(req.as_bytes())?;
-    s.flush()?;
-    let mut raw = Vec::new();
-    s.read_to_end(&mut raw)?;
-    Ok(decode_http_body(&raw))
-}
-
-fn decode_http_body(raw: &[u8]) -> String {
-    let text = String::from_utf8_lossy(raw);
-    let (headers, body) = match text.split_once("\r\n\r\n") {
-        Some(hb) => hb,
-        None => return String::new(),
-    };
-    if headers.to_ascii_lowercase().contains("transfer-encoding: chunked") {
-        dechunk(body)
-    } else {
-        body.to_string()
-    }
-}
-
-fn dechunk(mut body: &str) -> String {
-    let mut out = String::new();
-    loop {
-        let nl = match body.find("\r\n") {
-            Some(i) => i,
-            None => break,
-        };
-        let size = usize::from_str_radix(body[..nl].trim(), 16).unwrap_or(0);
-        if size == 0 {
-            break;
-        }
-        let start = nl + 2;
-        let end = start + size;
-        if end > body.len() {
-            break;
-        }
-        out.push_str(&body[start..end]);
-        body = &body[(end + 2).min(body.len())..]; // skip trailing CRLF
-    }
-    out
+    ollama::chat(model, SYSTEM_PROMPT, &user)
 }
 
 /// Extract the first balanced `{...}` object from model output (tolerating stray
@@ -609,12 +567,6 @@ mod tests {
     #[test]
     fn none_when_no_json() {
         assert!(extract_json("just talking, no json here").is_none());
-    }
-
-    #[test]
-    fn dechunk_reassembles() {
-        let chunked = "5\r\nhello\r\n1\r\n!\r\n0\r\n\r\n";
-        assert_eq!(dechunk(chunked), "hello!");
     }
 
     #[test]

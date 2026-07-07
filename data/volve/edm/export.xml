@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<export>
+  <CD_WELL well_id="wl-14" well_legal_name="NO 15/9-F-14" spud_date="2007-12-04" water_depth="91.0" />
+  <CD_WELL well_id="wl-15" well_legal_name="NO 15/9-F-15" spud_date="2008-06-17" water_depth="89.5" />
+  <CD_WELLBORE wellbore_id="wb-14a" well_id="wl-14" wellbore_name="NO 15/9-F-14 A" />
+  <CD_WELLBORE wellbore_id="wb-15a" well_id="wl-15" wellbore_name="NO 15/9-F-15 A" />
+  <CD_ASSEMBLY assembly_id="asm-7" wellbore_id="wb-14a" assembly_name="BHA Run 7" hole_size="12.25" md_assembly_top="1890.0" md_assembly_base="2210.0" />
+  <CD_ASSEMBLY assembly_id="asm-8" wellbore_id="wb-15a" assembly_name="BHA Run 3" hole_size="8.5" md_assembly_top="2480.0" md_assembly_base="2660.0" />
+  <CD_ASSEMBLY_COMP component_id="cmp-1" assembly_id="asm-7" component_type="PDC Bit" length="0.35" outer_diameter="12.25" />
+  <CD_ASSEMBLY_COMP component_id="cmp-2" assembly_id="asm-7" component_type="Mud Motor" length="8.7" outer_diameter="9.5" />
+  <CD_ASSEMBLY_COMP component_id="cmp-3" assembly_id="asm-7" component_type="Stabilizer" length="2.1" outer_diameter="12.13" />
+  <CD_ASSEMBLY_COMP component_id="cmp-4" assembly_id="asm-8" component_type="PDC Bit" length="0.32" outer_diameter="8.5" />
+  <CD_DATUM datum_id="dt-1" well_id="wl-14" datum_name="RKB" datum_elevation="53.4" />
+  <CD_DATUM datum_id="dt-2" well_id="wl-15" datum_name="RKB" datum_elevation="53.4" />
+</export>

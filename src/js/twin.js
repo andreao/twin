@@ -449,14 +449,17 @@ const T = (() => {
   // the statistical one on fold and replays from the journal like any tool call.
   function doAnnotate(a) {
     const src = resolveSourceName(a.source);
-    const field = String(a.field || '');
+    const asked = String(a.field || '');
     const cols = Object.keys((sources.get(src) || {}).schema || {});
-    if (!cols.length || !field) {
-      logStep('failed', `${String(a.source || '')}.${field}`, { subject: `schema:${src}.${field}`, tone: 'error', detail: 'no such source to annotate; mount or build it first' });
+    if (!cols.length || !asked) {
+      logStep('failed', `${String(a.source || '')}.${asked}`, { subject: `schema:${src}.${asked}`, tone: 'error', detail: 'no such source to annotate; mount or build it first' });
       return;
     }
-    if (!cols.includes(field)) {
-      logStep('failed', `${srcTitle(src)} · ${field}`, { subject: `schema:${src}.${field}`, tone: 'error', detail: `no field “${field}” — fields are: ${cols.join(', ')}` });
+    // meet the model halfway on casing/punctuation ("md" → "MD")
+    const canon = (x) => String(x).toLowerCase().replace(/[^a-z0-9]/g, '');
+    const field = cols.includes(asked) ? asked : cols.find((k) => canon(k) === canon(asked));
+    if (!field) {
+      logStep('failed', `${srcTitle(src)} · ${asked}`, { subject: `schema:${src}.${asked}`, tone: 'error', detail: `no field “${asked}” — fields are: ${cols.join(', ')}` });
       return;
     }
     const facts = { title: String(a.title || ''), description: String(a.description || '') };
@@ -1362,14 +1365,19 @@ const T = (() => {
   function openAgentPage(panel) {
     const V = viewer(panel, 'What’s happening', { type: 'open_agent' });
     agentPanels.add(V.panel);
-    V.add('div', 'ag:l1', null, 0); V.set('ag:l1', 'class', 'ad-section'); V.text('ag:l1', 'Plan');
-    V.add('div', 'ag:list', null, 1); V.set('ag:list', 'class', 'agent-block');
+    // one list: the live moment on top (while the agent computes, the client
+    // mirrors the harness's status detail into it — class agent-live; between
+    // turns it reads as the last step taken), then the plan items under it.
+    V.add('div', 'ag:list', null, 0); V.set('ag:list', 'class', 'agent-block');
+    V.add('div', 'ag:now', 'ag:list', 0); V.set('ag:now', 'class', 'act-detail agent-live');
+    const lastStep = activityTail[activityTail.length - 1];
+    V.text('ag:now', lastStep ? `last: ${stepLine(lastStep)}` : 'quiet — waiting for something to do');
     const items = [...agenda].sort((x, y) => {
       const rank = (st) => (st === 'active' ? 0 : st === 'open' ? 1 : 2);
       return rank(x[1].status) - rank(y[1].status);
     });
-    if (!items.length) { V.add('div', 'ag:none', 'ag:list', 0); V.set('ag:none', 'class', 'ad-empty'); V.text('ag:none', 'no plan yet: the agent lays out its own work here'); }
-    let i = 0;
+    if (!items.length) { V.add('div', 'ag:none', 'ag:list', 1); V.set('ag:none', 'class', 'ad-empty'); V.text('ag:none', 'no plan yet: the agent lays out its own work here'); }
+    let i = 1;
     let queued = 0; // only ONE thing is next — everything open behind it is "later"
     for (const [id, a] of items) {
       if (a.status === 'done' && i > 8) continue;
@@ -1383,8 +1391,8 @@ const T = (() => {
         V.text('ag:live', n ? n.text : 'working on it…');
       }
     }
-    V.add('div', 'ag:l2', null, 2); V.set('ag:l2', 'class', 'ad-section'); V.text('ag:l2', 'Recent steps');
-    V.add('div', 'ag:acts', null, 3); V.set('ag:acts', 'class', 'agent-block');
+    V.add('div', 'ag:l2', null, 1); V.set('ag:l2', 'class', 'ad-section'); V.text('ag:l2', 'Recent steps');
+    V.add('div', 'ag:acts', null, 2); V.set('ag:acts', 'class', 'agent-block');
     // fold first (chronological), then newest on top — this is a recency feed.
     // Issues are not steps: they live on the Findings board and in the telling.
     const recent = foldSteps(activityTail.filter((e) => e.kind !== 'flagged')).slice(-30).reverse();
@@ -1539,8 +1547,20 @@ const T = (() => {
       if (sid === undefined) throw new Error(`table("${n}"): no such source; mount or build it first`);
       return G.stateOf(sid).support().map((r) => r.asObject());
     };
+    // Deterministic linking helpers (§8.1: explicit joins, no similarity scores):
+    // normalizeWell reconciles well naming across systems ("NO 15/9-F-14 B" ⇄
+    // "15/9-F-14 B"); inInterval is the depth/time interval-join primitive.
+    const normalizeWell = (s) => String(s == null ? '' : s).toUpperCase()
+      .replace(/^NO\s+/, '').replace(/\s*\/\s*/g, '/').replace(/\s+/g, ' ').trim();
+    const inInterval = (v, lo, hi) => {
+      const n = Number(v);
+      return Number.isFinite(n) && n >= Number(lo) && n <= Number(hi);
+    };
     let out;
-    try { out = new Function('rows', 'table', code)(G.stateOf(id).support().map((r) => r.asObject()), table); }
+    try {
+      out = new Function('rows', 'table', 'normalizeWell', 'inInterval', code)(
+        G.stateOf(id).support().map((r) => r.asObject()), table, normalizeWell, inInterval);
+    }
     catch (err) { step('failed', { tone: 'error', detail: `${err.message}; fix the code and re-author` }); return; }
     if (!Array.isArray(out)) { step('failed', { tone: 'error', detail: 'the code must return an array of rows' }); return; }
     if (!out.length) {
@@ -1802,7 +1822,16 @@ const T = (() => {
     if (a.filter) { const q = String(a.filter).toLowerCase(); rows = rows.filter((r) => Object.values(r).some((v) => v != null && String(v).toLowerCase().includes(q))); }
     const limit = Math.max(1, Math.min(Number(a.limit) || 10, MAX_EXPLORE_ROWS));
     rows = rows.slice(0, limit);
-    const cols = Array.isArray(a.columns) && a.columns.length ? a.columns : Object.keys(s.schema || {});
+    // The model names columns loosely — "wellbore", "MD ", a field's human title —
+    // so resolve each against the REAL keys (else the header renders but every
+    // cell misses).  Unresolvable columns drop; none resolved = show everything.
+    const real = Object.keys(s.schema || rows[0] || {});
+    const canon = (x) => String(x).toLowerCase().replace(/[^a-z0-9]/g, '');
+    const resolveCol = (c) => real.find((k) => k === c)
+      || real.find((k) => canon(k) === canon(c))
+      || real.find((k) => canon(fieldTitle(srcName, k)) === canon(c));
+    const asked = Array.isArray(a.columns) ? a.columns.map(resolveCol).filter(Boolean) : [];
+    const cols = asked.length ? [...new Set(asked)] : real;
     const title = a.title || srcTitle(srcName);
     const sq = append('view', { text: title, view: 'table' });
     renderTableInto(`item:${sq}:body`, `v${sq}`, rows, cols.length ? cols : Object.keys(rows[0] || {}),
@@ -2035,6 +2064,8 @@ const T = (() => {
   return {
     agentTool, event, perceive, mountSource, sourceError, installSkill,
     chartSeries, chartMessage, chartInline, chartInlineMessage,
+    // host-side effects (OCR, search, fetches) report into the same activity log
+    log(kind, text, detail, subject, tone) { logStep(kind, text, { detail, subject, tone }); },
     // the shared mutation log (§11.3): replaying [0..total) rebuilds the DOM exactly.
     total() { return TWIN_MUT.length; },
     from(n) { return JSON.stringify(TWIN_MUT.slice(n)); },

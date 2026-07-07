@@ -432,7 +432,7 @@
   const statusEl = document.getElementById("status");
   const statusText = document.getElementById("statustext");
   const statusLine = document.getElementById("status-line");
-  let statusOn = false, statusBg = false, twinPaused = false, wsLive = false;
+  let statusOn = false, statusBg = false, statusDetail = "", twinPaused = false, wsLive = false;
   // one composed sentence for the status bar, from the fold slots
   // (active item / last action / next item) — a single truncation point
   function refreshWorking() {
@@ -440,22 +440,25 @@
     const act = document.getElementById("agent-act").textContent;
     const plan = document.getElementById("agent-plan").textContent;
     if (statusOn) {
-      // even a foreground "thinking" turn says what it's actually doing (the last step)
+      // the live moment from the agent harness beats the stale last-step line
+      const now = statusDetail || act;
       statusLine.textContent = statusBg
-        ? ((doing || "working") + (act ? " · " + act : ""))
-        : ("thinking…" + (act ? " · " + act : ""));
+        ? ((doing || "working") + (now ? " · " + now : ""))
+        : ("thinking…" + (now ? " · " + now : ""));
     } else if (twinPaused) {
       statusLine.textContent = "paused";
     } else {
-      // between turns: "waiting" while there's open work; "idle" only when there's none
-      statusLine.textContent = (plan || doing) ? `waiting · ${plan || "on: " + doing}` : "idle";
+      // between turns: the agent's own parting line ("resting between checks")
+      // beats a bare "idle"; open work reads as waiting on it
+      statusLine.textContent = statusDetail
+        || ((plan || doing) ? `waiting · ${plan || "on: " + doing}` : "idle");
     }
-    // the active plan row's live line mirrors this: while the agent is actually
-    // computing, it reads as such (the server text is restored afterwards).
+    // every live line (the agent page's Now, an active plan row) mirrors the
+    // moment while the agent computes; the server text is restored afterwards.
     document.querySelectorAll(".agent-live").forEach((el) => {
       if (statusOn) {
         if (el.dataset.srv == null) el.dataset.srv = el.textContent;
-        el.textContent = statusBg ? (act || doing || "working…") : "thinking about your message…";
+        el.textContent = statusDetail || (statusBg ? (act || doing || "working…") : "thinking about your message…");
       } else if (el.dataset.srv != null) {
         el.textContent = el.dataset.srv;
         delete el.dataset.srv;
@@ -564,6 +567,7 @@
       }
       else if (msg.type === "status") {
         statusOn = !!msg.working; statusBg = !!msg.background;
+        statusDetail = String(msg.detail || "");
         statusbar.classList.toggle("on", statusOn);
         refreshWorking();
         autoscroll();

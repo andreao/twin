@@ -173,6 +173,24 @@ impl JsGraph {
         n
     }
 
+    /// Mount rows manufactured by a host effect (document text, a fetch) as a
+    /// derived source — same entry as a file mount, different residence.
+    pub fn twin_mount_rows(&mut self, name: &str, rows: &[serde_json::Value], locator: &str) {
+        let rows_json = serde_json::to_string(rows).unwrap_or_else(|_| "[]".into());
+        let meta = serde_json::json!({
+            "locator": locator, "residence": "derived",
+            "rowcount": rows.len(), "materialized": rows.len(),
+        })
+        .to_string();
+        self.call(&format!("T.mountSource({name:?}, {meta}, {rows_json})"));
+    }
+
+    /// Log one step into the agent's activity log (§12.3) from a host-side effect,
+    /// so slow boundary work (OCR, search) reports back the same way JS tools do.
+    pub fn twin_log_step(&mut self, kind: &str, text: &str, detail: &str, subject: &str, tone: &str) {
+        self.call(&format!("T.log({kind:?}, {text:?}, {detail:?}, {subject:?}, {tone:?})"));
+    }
+
     /// Install a skill (§4.1) into the twin — used by the core skills-loader (§11.13).
     pub fn twin_install_skill(&mut self, name: &str, title: &str, description: &str, files: &[String]) {
         let meta = serde_json::json!({ "title": title, "description": description, "files": files }).to_string();

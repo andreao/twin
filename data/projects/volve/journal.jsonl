@@ -1,0 +1,88 @@
+{"k":"tool","p":"{\"tool\":\"read_source\",\"args\":{\"path\":\"data/volve/witsml/drillReports.xml\"}}"}
+{"k":"tool","p":"{\"tool\":\"describe\",\"args\":{\"source\":\"drillReports\",\"title\":\"Daily drill reports\",\"description\":\"One row per reported activity: what happened on the well each day, over which depth interval, in the driller's own words.\",\"origin\":\"Volve (Equinor open data) · via skill obtain-volve\"}}"}
+{"k":"tool","p":"{\"tool\":\"read_source\",\"args\":{\"path\":\"data/volve/witsml/trajectory.xml\"}}"}
+{"k":"tool","p":"{\"tool\":\"describe\",\"args\":{\"source\":\"trajectory\",\"title\":\"Wellbore trajectory\",\"description\":\"Survey stations along the wellbore: measured depth, inclination, azimuth and true vertical depth.\",\"origin\":\"Volve (Equinor open data) · via skill obtain-volve\"}}"}
+{"k":"tool","p":"{\"tool\":\"read_source\",\"args\":{\"path\":\"data/volve/edm/export.xml\"}}"}
+{"k":"tool","p":"{\"tool\":\"describe\",\"args\":{\"source\":\"export\",\"title\":\"Engineering export\",\"description\":\"The EDM engineering database flattened: wells, wellbores, BHA assemblies and their components, one row per record with its family.\",\"origin\":\"Volve (Equinor open data) · via skill obtain-volve\"}}"}
+{"k":"tool","p":"{\"tool\":\"read_source\",\"args\":{\"path\":\"data/volve/logs/15_9-F-14.las\"}}"}
+{"k":"tool","p":"{\"tool\":\"describe\",\"args\":{\"source\":\"15-9-F-14\",\"title\":\"Well log 15/9-F-14\",\"description\":\"Wireline curves along measured depth: gamma ray, bulk density, neutron porosity and resistivity through the reservoir section.\",\"origin\":\"Volve (Equinor open data) · via skill obtain-volve\"}}"}
+{"k":"tool","p":"{\"tool\":\"read_source\",\"args\":{\"path\":\"data/volve/picks/wellpicks.txt\"}}"}
+{"k":"tool","p":"{\"tool\":\"describe\",\"args\":{\"source\":\"wellpicks\",\"title\":\"Formation picks\",\"description\":\"The geologist's tops: where each formation starts per wellbore, in measured and true vertical depth.\",\"origin\":\"Volve (Equinor open data) · via skill obtain-volve\"}}"}
+{"k":"ev","p":"{\"panel\":0,\"title\":\"What’s happening\",\"ts\":1783445467713,\"type\":\"open_agent\"}"}
+{"k":"ev","p":"{\"panel\":0,\"title\":\"What’s happening\",\"ts\":1783445497481,\"type\":\"open_agent\"}"}
+{"k":"ev","p":"{\"panel\":0,\"title\":\"What’s happening\",\"ts\":1783445497968,\"type\":\"open_agent\"}"}
+{"k":"tool","p":"{\"tool\":\"think\",\"args\":{\"text\":\"I see a rich set of drilling and geological data; I'll start by showing the formation picks to establish our baseline.\"}}"}
+{"k":"tool","p":"{\"tool\":\"show\",\"args\":{\"view\":\"table\",\"source\":\"wellpicks\",\"columns\":[\"Wellbore\",\"Surface\",\"MD\",\"TVD\"],\"title\":\"Formation Picks Overview\"}}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"source\":\"drillReports\",\"field\":\"<?xml version=1.0 encoding=UTF-8?>\",\"title\":\"Raw WITSML Report\",\"description\":\"The original XML data containing daily drilling activities and depth intervals.\"}}"}
+{"k":"tool","p":"{\"tool\":\"think\",\"args\":{\"text\":\"Annotating the raw WITSML data in the trajectory source to provide a clear human-readable name.\"}}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"source\":\"trajectory\",\"field\":\"<?xml version=1.0 encoding=UTF-8?>\",\"title\":\"WITSML Trajectory Data\",\"description\":\"The raw WITSML XML string containing survey points, including depth, inclination, and azimuth.\"}}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"source\":\"export\",\"field\":\"<?xml version=1.0 encoding=UTF-8?>\",\"title\":\"Engineering Data Record\",\"description\":\"Raw XML data containing well, wellbore, and BHA component information from the EDM database.\"}}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"source\":\"15-9-F-14\",\"field\":\"~Version ---------------------------------------------------\",\"title\":\"Log Version Header\",\"description\":\"Identifies the version of the CWLS log standard used for this well's wireline data.\"}}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"source\":\"wellpicks\",\"field\":\"Wellbore           Surface            MD      TVD\",\"title\":\"Formation Marker Data\",\"description\":\"Contains the well identifier, formation name, and depth measurements (measured and true vertical) for geological markers.\"}}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"source\":\"drillReports\",\"field\":\"<?xml version=1.0 encoding=UTF-8?>\",\"title\":\"Raw WITSML Report\",\"description\":\"The original XML data containing daily drilling activities and depth intervals.\"}}"}
+{"k":"ev","p":"{\"name\":\"wellpicks\",\"panel\":0,\"title\":\"Formation picks\",\"ts\":1783446290418,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"wellpicks\",\"panel\":0,\"title\":\"Formation picks\",\"ts\":1783446297025,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"table\",\"name\":\"wellpicks\",\"panel\":0,\"title\":\"Formation picks\",\"ts\":1783446297717,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"wellpicks\",\"panel\":0,\"title\":\"Formation picks\",\"ts\":1783446298683,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"table\",\"name\":\"wellpicks\",\"panel\":0,\"title\":\"Formation picks\",\"ts\":1783446299742,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"wellpicks\",\"panel\":0,\"title\":\"Formation picks\",\"ts\":1783446301646,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"text\":\"Document the fields of Formation picks: annotate every field that still lacks a title with a short human title and a one-sentence meaning. If a field's meaning cannot be read from the data, ask me.\",\"ts\":1783446303828,\"type\":\"user_message\"}"}
+{"k":"ev","p":"{\"mode\":\"table\",\"name\":\"wellpicks\",\"panel\":0,\"title\":\"Formation picks\",\"ts\":1783446307009,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"name\":\"drillReports\",\"panel\":0,\"title\":\"Daily drill reports\",\"ts\":1783446309400,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"name\":\"trajectory\",\"panel\":0,\"title\":\"Wellbore trajectory\",\"ts\":1783446311083,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"name\":\"drillReports\",\"panel\":0,\"title\":\"Daily drill reports\",\"ts\":1783446314353,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"name\":\"trajectory\",\"panel\":0,\"title\":\"Wellbore trajectory\",\"ts\":1783446316052,\"type\":\"open_source\"}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"field\":\"mdHoleEnd\",\"source\":\"drillReports\",\"title\":\"End Hole Depth\",\"description\":\"The measured depth at which the drilling operation ended for this specific report.\"}}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"trajectory\",\"panel\":0,\"title\":\"Wellbore trajectory\",\"ts\":1783446319873,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"table\",\"name\":\"trajectory\",\"panel\":0,\"title\":\"Wellbore trajectory\",\"ts\":1783446322864,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"trajectory\",\"panel\":0,\"title\":\"Wellbore trajectory\",\"ts\":1783446344667,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"table\",\"name\":\"trajectory\",\"panel\":0,\"title\":\"Wellbore trajectory\",\"ts\":1783446345267,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"panel\":0,\"title\":\"What’s happening\",\"ts\":1783446349422,\"type\":\"open_agent\"}"}
+{"k":"tool","p":"{\"tool\":\"think\",\"args\":{\"text\":\"Annotating the 'Measured Depth' field in the Formation picks source to provide clear semantics.\"}}"}
+{"k":"ev","p":"{\"name\":\"wellpicks\",\"panel\":0,\"title\":\"Formation picks\",\"ts\":1783446402058,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"name\":\"wellpicks\",\"panel\":0,\"title\":\"Formation picks\",\"ts\":1783446403604,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"name\":\"wellpicks\",\"panel\":0,\"title\":\"Formation picks\",\"ts\":1783446405032,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"name\":\"wellpicks\",\"panel\":0,\"title\":\"Formation picks\",\"ts\":1783446406125,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"name\":\"wellpicks\",\"panel\":0,\"title\":\"Formation picks\",\"ts\":1783446406725,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"name\":\"wellpicks\",\"panel\":0,\"title\":\"Formation picks\",\"ts\":1783446408578,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"name\":\"15-9-F-14\",\"panel\":0,\"title\":\"Well log 15/9-F-14\",\"ts\":1783446410141,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"name\":\"wellpicks\",\"panel\":0,\"title\":\"Formation picks\",\"ts\":1783446411782,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"name\":\"wellpicks\",\"panel\":0,\"title\":\"Formation picks\",\"ts\":1783446414145,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"panel\":0,\"title\":\"The twin\",\"ts\":1783446416872,\"type\":\"open_board\"}"}
+{"k":"ev","p":"{\"panel\":1,\"title\":\"Schema map\",\"ts\":1783446419221,\"type\":\"open_schema\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"drillReports:t\",\"panel\":2,\"title\":\"drillReports:t\",\"ts\":1783446425388,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"drillReports\",\"panel\":2,\"title\":\"Daily drill reports\",\"ts\":1783446425389,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"trajectory:t\",\"panel\":2,\"title\":\"trajectory:t\",\"ts\":1783446436638,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"trajectory\",\"panel\":2,\"title\":\"Wellbore trajectory\",\"ts\":1783446436638,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"export:r\",\"panel\":2,\"title\":\"export:r\",\"ts\":1783446438559,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"export\",\"panel\":2,\"title\":\"Engineering export\",\"ts\":1783446438560,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"15-9-F-14:r\",\"panel\":2,\"title\":\"15-9-F-14:r\",\"ts\":1783446439559,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"15-9-F-14\",\"panel\":2,\"title\":\"Well log 15/9-F-14\",\"ts\":1783446439559,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"wellpicks:t\",\"panel\":2,\"title\":\"wellpicks:t\",\"ts\":1783446441900,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"wellpicks\",\"panel\":2,\"title\":\"Formation picks\",\"ts\":1783446441900,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"drillReports:r\",\"panel\":2,\"title\":\"drillReports:r\",\"ts\":1783446443225,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"drillReports\",\"panel\":2,\"title\":\"Daily drill reports\",\"ts\":1783446443226,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"name\":\"trajectory\",\"panel\":1,\"title\":\"Wellbore trajectory\",\"ts\":1783446468464,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"panel\":1,\"title\":\"Schema map\",\"ts\":1783446469583,\"type\":\"open_schema\"}"}
+{"k":"ev","p":"{\"name\":\"trajectory\",\"panel\":1,\"title\":\"Wellbore trajectory\",\"ts\":1783446470213,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"name\":\"export\",\"panel\":1,\"title\":\"Engineering export\",\"ts\":1783446471759,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"name\":\"15-9-F-14\",\"panel\":1,\"title\":\"Well log 15/9-F-14\",\"ts\":1783446474595,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"name\":\"wellpicks\",\"panel\":1,\"title\":\"Formation picks\",\"ts\":1783446476225,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"id\":987524,\"panel\":1,\"title\":\"Finding\",\"ts\":1783446478534,\"type\":\"open_finding\"}"}
+{"k":"ev","p":"{\"id\":987524,\"panel\":1,\"title\":\"Finding\",\"ts\":1783446488021,\"type\":\"open_finding\"}"}
+{"k":"ev","p":"{\"id\":998375,\"panel\":1,\"title\":\"Finding\",\"ts\":1783446490433,\"type\":\"open_finding\"}"}
+{"k":"ev","p":"{\"id\":913684,\"panel\":1,\"title\":\"Finding\",\"ts\":1783446493959,\"type\":\"open_finding\"}"}
+{"k":"ev","p":"{\"id\":903975,\"panel\":1,\"title\":\"Finding\",\"ts\":1783446495162,\"type\":\"open_finding\"}"}
+{"k":"ev","p":"{\"id\":932996,\"panel\":1,\"title\":\"Finding\",\"ts\":1783446497788,\"type\":\"open_finding\"}"}
+{"k":"ev","p":"{\"id\":903975,\"panel\":1,\"title\":\"Finding\",\"ts\":1783446499267,\"type\":\"open_finding\"}"}
+{"k":"ev","p":"{\"id\":932996,\"panel\":1,\"title\":\"Finding\",\"ts\":1783446499871,\"type\":\"open_finding\"}"}
+{"k":"ev","p":"{\"name\":\"drillReports\",\"panel\":1,\"title\":\"Daily drill reports\",\"ts\":1783446500692,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"panel\":0,\"title\":\"The twin\",\"ts\":1783446505194,\"type\":\"open_board\"}"}
+{"k":"ev","p":"{\"panel\":0,\"title\":\"The twin\",\"ts\":1783446505854,\"type\":\"open_board\"}"}
+{"k":"ev","p":"{\"panel\":0,\"title\":\"The twin\",\"ts\":1783446506854,\"type\":\"open_board\"}"}
+{"k":"ev","p":"{\"panel\":1,\"title\":\"Schema map\",\"ts\":1783446508105,\"type\":\"open_schema\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"drillReports:r\",\"panel\":2,\"title\":\"drillReports:r\",\"ts\":1783446509116,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"drillReports\",\"panel\":2,\"title\":\"Daily drill reports\",\"ts\":1783446509116,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"panel\":0,\"title\":\"What’s happening\",\"ts\":1783446517363,\"type\":\"open_agent\"}"}
+{"k":"tool","p":"{\"tool\":\"think\",\"args\":{\"text\":\"Annotating the 'Measured Depth' field in the Formation picks source to provide clear semantics.\"}}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"source\":\"wellpicks\",\"field\":\"MD\",\"title\":\"Measured Depth\",\"description\":\"The depth measured along the wellbore from the surface.\"}}"}
