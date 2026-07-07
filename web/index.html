@@ -25,6 +25,11 @@
   .chip { border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 99px; padding: 4px 12px; font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; flex: none; transition: border-color .12s, background .12s; }
   .chip:hover { border-color: var(--accent); background: var(--accent-soft); }
   .chip.starred { color: #7a4a38; background: var(--accent-soft); border-color: #eeddd4; }
+  /* the project switcher lives beside the brand; its menu reuses the run-control menu */
+  .proj { position: relative; flex: none; }
+  .proj-chip { font-weight: 600; }
+  .proj .status-menu { left: 0; right: auto; }
+  .proj .status-menu button.current { color: #7a4a38; background: var(--accent-soft); }
   .status { position: relative; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 7px; flex: none; margin-left: auto; cursor: pointer; padding: 4px 8px; border-radius: 8px; }
   .status:hover { background: var(--bg); }
   .status .dot { width: 7px; height: 7px; border-radius: 50%; background: #ccc; }
@@ -290,6 +295,11 @@
     </svg>
     Vardøger
   </div>
+  <!-- the project switcher: a project is a completely separate everything -->
+  <div class="proj" id="proj">
+    <button class="chip proj-chip" id="proj-name"></button>
+    <div class="status-menu" id="proj-menu"></div>
+  </div>
   <div class="chips" id="stars-root"></div>
   <div class="chips" id="recents-root"></div>
   <div class="status" id="status"><span class="dot"></span><span id="statustext">connecting…</span></div>
@@ -339,6 +349,44 @@
   boardRoot.id = "board-root";
   boardRoot.className = "board-grid";
   nodes.set("board-root", boardRoot);
+
+  // ---- the project: one slug from the URL; the socket, and so everything, is scoped by it ----
+  const slugify = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const PROJECT = slugify(new URLSearchParams(location.search).get("project")) || "default";
+  document.title = PROJECT === "default" ? "Vardøger" : `Vardøger · ${PROJECT}`;
+  const projName = document.getElementById("proj-name");
+  const projMenu = document.getElementById("proj-menu");
+  projName.textContent = PROJECT;
+  const gotoProject = (p) => {
+    location.href = location.pathname + (p === "default" ? "" : "?project=" + encodeURIComponent(p));
+  };
+  projName.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (!projMenu.classList.toggle("open")) return;
+    projMenu.textContent = "";
+    let list = ["default"];
+    try { list = await (await fetch("/projects")).json(); } catch (_) {}
+    if (!list.includes(PROJECT)) list.push(PROJECT);
+    list.forEach((p) => {
+      const b = document.createElement("button");
+      b.textContent = p;
+      if (p === PROJECT) b.className = "current";
+      b.addEventListener("click", () => gotoProject(p));
+      projMenu.appendChild(b);
+    });
+    const nb = document.createElement("button");
+    nb.textContent = "New project…";
+    nb.addEventListener("click", () => {
+      const name = slugify(prompt("Name the new project. It is a completely separate everything: its own data, chat, agent, and memory."));
+      if (name) gotoProject(name);
+    });
+    projMenu.appendChild(nb);
+    const note = document.createElement("div");
+    note.className = "menu-note";
+    note.textContent = "Each project is fully separate.";
+    projMenu.appendChild(note);
+  });
+  document.addEventListener("click", (e) => { if (!document.getElementById("proj").contains(e.target)) projMenu.classList.remove("open"); });
 
   const feedwrap = document.getElementById("feedwrap");
   const statusEl = document.getElementById("status");
@@ -450,7 +498,7 @@
   let ws;
   let freshSnapshot = false; // the first batch after (re)connect = full history replay
   function connect() {
-    ws = new WebSocket(`ws://${location.host}/ws`);
+    ws = new WebSocket(`ws://${location.host}/ws?project=${encodeURIComponent(PROJECT)}`);
     ws.onopen = () => { resetDom(); freshSnapshot = true; wsLive = true; statusEl.classList.add("live"); renderTwinState(); };
     ws.onclose = () => {
       wsLive = false; statusEl.classList.remove("live"); statusText.textContent = "reconnecting…";

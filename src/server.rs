@@ -8,11 +8,12 @@
 //! agent (§12) is a THIRD party on the same channels: it perceives the graph as a
 //! structured projection (§12.3) and acts by emitting tool-calls that become edits.
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use crate::agent;
@@ -54,10 +55,77 @@ fn now_ms() -> u64 {
 /// dir each boot, then history replays on top.  Delete the file for a fresh twin.
 const JOURNAL: &str = "data/journal.jsonl";
 
-/// The journal path — overridable (TWIN_JOURNAL) so tests and experiments never
-/// write synthetic history into the real twin's memory.
-fn journal_path() -> String {
-    std::env::var("TWIN_JOURNAL").unwrap_or_else(|_| JOURNAL.to_string())
+/// A PROJECT is a completely separate everything: its own graph (V8 isolate on
+/// its own thread), its own agent, its own journal, its own clients.  The only
+/// shared things are the binary, the skills directory, and the demo-data files.
+/// The pre-projects journal keeps living at data/journal.jsonl as "default";
+/// every other project journals under data/projects/<slug>/.
+type ProjectHandle = (Sender<Cmd>, Arc<std::sync::atomic::AtomicUsize>);
+type Projects = Arc<Mutex<HashMap<String, ProjectHandle>>>;
+
+/// Normalize a user-supplied project name to a stable slug.
+fn project_slug(raw: &str) -> String {
+    let s: String = raw
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let t = s.trim_matches('-');
+    if t.is_empty() { "default".into() } else { t.to_string() }
+}
+
+/// The journal path for one project — TWIN_JOURNAL still overrides the default
+/// project's path, so tests and experiments never write into the real memory.
+fn project_journal(slug: &str) -> String {
+    if slug == "default" {
+        std::env::var("TWIN_JOURNAL").unwrap_or_else(|_| JOURNAL.to_string())
+    } else {
+        format!("data/projects/{slug}/journal.jsonl")
+    }
+}
+
+/// Every project that exists on disk (has a journal), plus the default.
+fn list_projects() -> Vec<String> {
+    let mut out = vec!["default".to_string()];
+    if let Ok(rd) = std::fs::read_dir("data/projects") {
+        for e in rd.flatten() {
+            if e.path().join("journal.jsonl").exists() {
+                if let Some(n) = e.file_name().to_str() {
+                    out.push(n.to_string());
+                }
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Get the project's graph channel, booting the whole stack (graph thread, agent,
+/// journal replay) on first touch.  The default project mounts the data manifest;
+/// every other project starts EMPTY — its sources arrive by the agent's own
+/// read_source calls, which are journaled and so replay.
+fn project_tx(slug: &str, projects: &Projects) -> ProjectHandle {
+    let mut map = projects.lock().unwrap();
+    if let Some(h) = map.get(slug) {
+        return h.clone();
+    }
+    let (tx, rx) = mpsc::channel::<Cmd>();
+    let paused = Arc::new(AtomicBool::new(false));
+    // how many clients are looking at this project RIGHT NOW — while zero, its
+    // agent is parked: switching projects pauses the one you left
+    let attended = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let wake = agent::spawn(tx.clone(), paused.clone(), attended.clone());
+    let jpath = project_journal(slug);
+    if let Some(dir) = std::path::Path::new(&jpath).parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let with_manifest = slug == "default";
+    let name = slug.to_string();
+    thread::spawn(move || graph_loop(rx, wake, paused, name, jpath, with_manifest));
+    let handle = (tx, attended);
+    map.insert(slug.to_string(), handle.clone());
+    handle
 }
 
 fn journal_append(file: &mut Option<std::fs::File>, kind: &str, payload: &str) {
@@ -84,26 +152,19 @@ fn apply_event(g: &mut JsGraph, stamped_json: &str) {
 
 /// Start the server (blocking). `addr` like "127.0.0.1:8080".
 pub fn serve(addr: &str) -> std::io::Result<()> {
-    let (tx, rx) = mpsc::channel::<Cmd>();
-
-    // The twin's run switch: while paused, the agent does NO background work (it
-    // still answers when the user writes).  Flipped by pause/resume UI events —
-    // which are journaled like all input, so the state survives restarts.
-    let paused = Arc::new(AtomicBool::new(false));
-
-    // The agent lives on its own thread (model calls block for seconds and must not
-    // stall the graph). It returns a wake channel the graph pokes on user input.
-    let wake = agent::spawn(tx.clone(), paused.clone());
-    thread::spawn(move || graph_loop(rx, wake, paused));
+    let projects: Projects = Arc::new(Mutex::new(HashMap::new()));
+    // the default project boots eagerly (it's the one with the demo mounts);
+    // every other project boots on the first client that asks for it
+    project_tx("default", &projects);
 
     let listener = TcpListener::bind(addr)?;
     println!("twin serve — open http://{addr}");
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                let tx = tx.clone();
+                let projects = projects.clone();
                 thread::spawn(move || {
-                    if let Err(e) = handle_conn(stream, tx) {
+                    if let Err(e) = handle_conn(stream, projects) {
                         eprintln!("conn: {e}");
                     }
                 });
@@ -130,8 +191,16 @@ fn twin_state_msg(paused: &AtomicBool) -> String {
     format!("{{\"type\":\"twin\",\"paused\":{}}}", paused.load(Ordering::Relaxed))
 }
 
-/// Owns the V8 graph; serializes all edits. Broadcasts new mutation slices + status.
-fn graph_loop(rx: Receiver<Cmd>, wake: Sender<agent::Wake>, paused: Arc<AtomicBool>) {
+/// Owns ONE project's V8 graph; serializes all its edits.  Broadcasts new
+/// mutation slices + status to that project's clients only.
+fn graph_loop(
+    rx: Receiver<Cmd>,
+    wake: Sender<agent::Wake>,
+    paused: Arc<AtomicBool>,
+    project: String,
+    journal_file: String,
+    with_manifest: bool,
+) {
     let mut g = JsGraph::new_twin();
 
     // Core skills-loader (§4.1, §11.13): seed the twin's skill registry from the static
@@ -150,7 +219,10 @@ fn graph_loop(rx: Receiver<Cmd>, wake: Sender<agent::Wake>, paused: Arc<AtomicBo
     // it never knows what "assets" or "documents" mean.  The domain vocabulary lives in
     // the data manifest, not in the core.  (Interim seam until the agent-driven boundary
     // lens does this itself with lineage.)
-    if let Ok(text) = std::fs::read_to_string("data/manifest.json") {
+    if let Ok(text) = with_manifest
+        .then(|| std::fs::read_to_string("data/manifest.json"))
+        .unwrap_or(Err(std::io::Error::other("no manifest for this project")))
+    {
         if let Ok(m) = serde_json::from_str::<serde_json::Value>(&text) {
             for entry in m["mounts"].as_array().into_iter().flatten() {
                 let name = entry["name"].as_str().unwrap_or("");
@@ -181,7 +253,7 @@ fn graph_loop(rx: Receiver<Cmd>, wake: Sender<agent::Wake>, paused: Arc<AtomicBo
     // Replay the journal: the twin REMEMBERS.  Same code paths as live traffic, so
     // the replay is exact; no clients are connected yet, so nothing is broadcast.
     let mut replayed = 0usize;
-    if let Ok(text) = std::fs::read_to_string(journal_path()) {
+    if let Ok(text) = std::fs::read_to_string(&journal_file) {
         for line in text.lines() {
             let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
             match (v["k"].as_str(), v["p"].as_str()) {
@@ -196,12 +268,12 @@ fn graph_loop(rx: Receiver<Cmd>, wake: Sender<agent::Wake>, paused: Arc<AtomicBo
         }
     }
     if replayed > 0 {
-        println!("replayed {replayed} journal events — the twin remembers");
+        println!("[{project}] replayed {replayed} journal events — the twin remembers");
     }
     let mut journal = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(journal_path())
+        .open(&journal_file)
         .ok();
 
     let mut clients: Vec<Sender<String>> = Vec::new();
@@ -341,18 +413,53 @@ fn wrap(mutations_json: &str) -> String {
     format!("{{\"type\":\"mutations\",\"batch\":{mutations_json}}}")
 }
 
-fn handle_conn(mut stream: TcpStream, tx: Sender<Cmd>) -> std::io::Result<()> {
+fn handle_conn(mut stream: TcpStream, projects: Projects) -> std::io::Result<()> {
     let request = ws::read_http_headers(&mut stream)?;
     if request.to_ascii_lowercase().contains("upgrade: websocket") {
+        // the socket names its project (ws?project=<slug>); the project boots on demand
+        let (tx, attended) = project_tx(&project_from_request(&request), &projects);
         if ws::send_handshake(&mut stream, &request)? {
-            serve_ws(stream, tx)?;
+            serve_ws(stream, tx, attended)?;
         }
+    } else if request_path(&request).is_some_and(|p| p == "/projects") {
+        serve_projects(stream)?;
     } else if let Some(name) = file_request(&request) {
         serve_file(stream, &name)?;
     } else {
         serve_html(stream)?;
     }
     Ok(())
+}
+
+/// The request path (with query) of the first request line.
+fn request_path(request: &str) -> Option<&str> {
+    request.lines().next()?.split_whitespace().nth(1)
+}
+
+/// The project slug a websocket asks for: `GET /ws?project=<name>`.
+fn project_from_request(request: &str) -> String {
+    let query = request_path(request)
+        .and_then(|p| p.split_once('?'))
+        .map(|(_, q)| q)
+        .unwrap_or("");
+    for kv in query.split('&') {
+        if let Some(v) = kv.strip_prefix("project=") {
+            return project_slug(v);
+        }
+    }
+    "default".into()
+}
+
+/// `GET /projects` → the project list as JSON, for the header switcher.
+fn serve_projects(mut stream: TcpStream) -> std::io::Result<()> {
+    let body = serde_json::to_string(&list_projects()).unwrap_or_else(|_| "[]".into());
+    let resp = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    stream.write_all(resp.as_bytes())?;
+    stream.flush()
 }
 
 /// A `GET /file/<name>` request → the basename to serve from the documents dir.
@@ -407,7 +514,13 @@ fn serve_html(mut stream: TcpStream) -> std::io::Result<()> {
     stream.flush()
 }
 
-fn serve_ws(stream: TcpStream, tx: Sender<Cmd>) -> std::io::Result<()> {
+fn serve_ws(
+    stream: TcpStream,
+    tx: Sender<Cmd>,
+    attended: Arc<std::sync::atomic::AtomicUsize>,
+) -> std::io::Result<()> {
+    // presence is per-socket: while this client lives, its project is attended
+    attended.fetch_add(1, Ordering::Relaxed);
     // register with the graph thread; it pushes mutation batches down `out_rx`.
     let (out_tx, out_rx) = mpsc::channel::<String>();
     tx.send(Cmd::Connect(out_tx)).ok();
@@ -435,5 +548,33 @@ fn serve_ws(stream: TcpStream, tx: Sender<Cmd>) -> std::io::Result<()> {
             Ok(ws::Frame::Close) | Err(_) => break,
         }
     }
+    // the client left — if it was the last one, the project's agent parks itself
+    attended.fetch_sub(1, Ordering::Relaxed);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_slugs_are_stable_and_safe() {
+        assert_eq!(project_slug("Valhall Platform"), "valhall-platform");
+        assert_eq!(project_slug("  ../../etc  "), "etc");
+        assert_eq!(project_slug("!!!"), "default");
+        assert_eq!(project_slug(""), "default");
+    }
+
+    #[test]
+    fn project_journals_are_separate_files() {
+        assert_eq!(project_journal("wind-farm"), "data/projects/wind-farm/journal.jsonl");
+        assert!(project_journal("default").ends_with("journal.jsonl"));
+    }
+
+    #[test]
+    fn ws_request_names_its_project() {
+        let req = "GET /ws?project=Wind%20Farm&x=1 HTTP/1.1\r\nHost: x\r\n";
+        assert_eq!(project_from_request(req), "wind-20farm");
+        assert_eq!(project_from_request("GET /ws HTTP/1.1\r\n"), "default");
+    }
 }

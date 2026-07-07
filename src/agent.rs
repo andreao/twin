@@ -16,7 +16,7 @@
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::thread;
@@ -114,9 +114,12 @@ pub enum Wake {
 /// Spawn the agent thread. Returns a wake channel the graph pokes on user input.
 /// `paused` is the twin's run switch: while set, background turns are skipped
 /// entirely — the agent only answers when the user addresses it.
-pub fn spawn(tx: Sender<Cmd>, paused: Arc<AtomicBool>) -> Sender<Wake> {
+/// `attended` counts the project's connected clients: a project nobody is
+/// looking at does NO background work either — switching projects parks the
+/// one you left, and coming back (a Connect → Presence wake) resumes it.
+pub fn spawn(tx: Sender<Cmd>, paused: Arc<AtomicBool>, attended: Arc<AtomicUsize>) -> Sender<Wake> {
     let (wake_tx, wake_rx) = mpsc::channel::<Wake>();
-    thread::spawn(move || agent_loop(tx, wake_rx, paused));
+    thread::spawn(move || agent_loop(tx, wake_rx, paused, attended));
     wake_tx
 }
 
@@ -130,8 +133,15 @@ fn drain(wake_rx: &Receiver<Wake>, mut w: Wake) -> Wake {
     w
 }
 
-fn agent_loop(tx: Sender<Cmd>, wake_rx: Receiver<Wake>, paused: Arc<AtomicBool>) {
+fn agent_loop(
+    tx: Sender<Cmd>,
+    wake_rx: Receiver<Wake>,
+    paused: Arc<AtomicBool>,
+    attended: Arc<AtomicUsize>,
+) {
     let model = std::env::var("TWIN_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+    // background work needs BOTH: not paused, and someone actually here
+    let is_parked = || paused.load(Ordering::Relaxed) || attended.load(Ordering::Relaxed) == 0;
     let is_paused = || paused.load(Ordering::Relaxed);
     // The agent itself opens the conversation — a real model turn (with the thinking
     // indicator), not a canned string, so it's clearly the agent talking.  But a
@@ -152,8 +162,9 @@ fn agent_loop(tx: Sender<Cmd>, wake_rx: Receiver<Wake>, paused: Arc<AtomicBool>)
                     Wake::Steer => Mode::Foreground,
                     Wake::Presence => Mode::Background,
                 };
-                // paused = no work of the agent's own; the user's words still land.
-                if mode == Mode::Background && is_paused() {
+                // parked (paused, or nobody here) = no work of the agent's own;
+                // the user's words still land.
+                if mode == Mode::Background && is_parked() {
                     idle = BG_FIRST_IDLE;
                     continue;
                 }
@@ -167,9 +178,9 @@ fn agent_loop(tx: Sender<Cmd>, wake_rx: Receiver<Wake>, paused: Arc<AtomicBool>)
                     Outcome::Idled => idle = BG_FIRST_IDLE, // just woken — stay attentive
                 }
             }
-            // quiet — the agent's own work time (unless the user paused the twin)
+            // quiet — the agent's own work time (unless paused or unattended)
             Err(RecvTimeoutError::Timeout) => {
-                if is_paused() {
+                if is_parked() {
                     idle = BG_MAX_IDLE; // nothing to do but wait for a wake
                     continue;
                 }
