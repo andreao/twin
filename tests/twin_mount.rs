@@ -409,7 +409,10 @@ fn the_history_tells_the_origin_story() {
     g.twin_read_source("turbines", &path, "mounted");
     g.twin_agent_tool(r#"{"tool":"describe","args":{"source":"turbines","title":"Turbine fleet","description":"All turbines.","origin":"Cognite CDF (Valhall) · via skill obtain-oid"}}"#);
     let muts = g.twin_from(0);
-    assert!(muts.contains("Installed skill: Obtain open industrial data"), "no skill card: {muts}");
+    // built-in skills are capabilities, not history: NO card in the chat — the
+    // agent introduces what it can do in its own greeting
+    assert!(!muts.contains("Installed skill"), "built-in skill leaked into the chat: {muts}");
+    assert!(g.twin_perceive().contains("Obtain open industrial data"), "skill not perceived");
     assert!(muts.contains("from Cognite CDF (Valhall)"), "mount card carries no provenance");
 }
 

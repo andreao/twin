@@ -1086,16 +1086,15 @@ const T = (() => {
   }
 
   // Install a skill (§4.1) — called by the core skills-loader from the static dir.
-  // A skill is part of the twin's ORIGIN STORY, so it reads as the first chapter of
-  // the chat history: this capability exists, and the data that follows came by it.
+  // Built-in capabilities are FACTS about the twin, not events that happened: they
+  // register quietly (the agent perceives them and speaks for itself in its
+  // greeting), never as cards in the chat.
   function installSkill(name, meta) {
     if (skills.has(name)) return;
     const title = meta.title || name;
     const files = meta.files || [];
     skills.set(name, { title, description: meta.description || '', files });
     G.submit(skillsSrc, ZSet.fromRows([rec({ name, title, description: meta.description || '' })]), prov('core'));
-    workCard(`Installed skill: ${title}`, meta.description || '',
-      files.length ? `capability “${name}” · tooling: ${files.join(', ')}` : `capability “${name}”`, null);
   }
 
   // ---- the agent's working state (agenda / activity / findings) ---------------
@@ -2017,7 +2016,7 @@ const T = (() => {
         sample: (s.sample || []).slice(0, 2),
       };
     });
-    const sks = [...skills].map(([name, s]) => ({ name, description: s.description }));
+    const sks = [...skills].map(([name, s]) => ({ name, title: s.title, description: s.description }));
     const ag = [...agenda].map(([id, a]) => ({ id, text: a.text, description: a.desc, status: a.status }));
     return JSON.stringify({
       profile: profile.asObject(),

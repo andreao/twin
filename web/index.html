@@ -30,6 +30,12 @@
   .proj-chip { font-weight: 600; }
   .proj .status-menu { left: 0; right: auto; }
   .proj .status-menu button.current { color: #7a4a38; background: var(--accent-soft); }
+  /* the creation form, in the app's own grammar */
+  .proj-form { display: flex; flex-direction: column; gap: 8px; padding: 8px; min-width: 270px; }
+  .proj-form input { border: 1px solid var(--line); background: var(--bg); border-radius: 8px; padding: 7px 11px; font: inherit; font-size: 12.5px; color: var(--ink); outline: none; }
+  .proj-form input:focus { border-color: var(--accent); }
+  .proj-form-row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 2px; }
+  .proj-form .fd-btn { padding: 5px 13px; font-size: 12.5px; }
   .status { position: relative; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 7px; flex: none; margin-left: auto; cursor: pointer; padding: 4px 8px; border-radius: 8px; }
   .status:hover { background: var(--bg); }
   .status .dot { width: 7px; height: 7px; border-radius: 50%; background: #ccc; }
@@ -353,38 +359,72 @@
   // ---- the project: one slug from the URL; the socket, and so everything, is scoped by it ----
   const slugify = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   const PROJECT = slugify(new URLSearchParams(location.search).get("project")) || "default";
-  document.title = PROJECT === "default" ? "Vardøger" : `Vardøger · ${PROJECT}`;
   const projName = document.getElementById("proj-name");
   const projMenu = document.getElementById("proj-menu");
   projName.textContent = PROJECT;
+  // the chip and the tab carry the project's TITLE, not its slug
+  const fetchProjects = async () => { try { return await (await fetch("/projects")).json(); } catch (_) { return []; } };
+  fetchProjects().then((list) => {
+    const me = list.find((p) => p.slug === PROJECT);
+    if (me && me.title) {
+      projName.textContent = me.title;
+      document.title = `Vardøger · ${me.title}`;
+    }
+  });
   const gotoProject = (p) => {
     location.href = location.pathname + (p === "default" ? "" : "?project=" + encodeURIComponent(p));
   };
+  // the creation form lives IN the popover, in the app's own grammar — no browser prompt
+  function newProjectForm() {
+    projMenu.textContent = "";
+    const form = document.createElement("div");
+    form.className = "proj-form";
+    const name = document.createElement("input");
+    name.placeholder = "Project name";
+    const desc = document.createElement("input");
+    desc.placeholder = "One line: what is it about?";
+    const row = document.createElement("div");
+    row.className = "proj-form-row";
+    const create = document.createElement("button");
+    create.className = "fd-btn primary";
+    create.textContent = "Create";
+    const cancel = document.createElement("button");
+    cancel.className = "fd-btn";
+    cancel.textContent = "Cancel";
+    create.addEventListener("click", async () => {
+      if (!name.value.trim()) { name.focus(); return; }
+      try {
+        const r = await fetch("/projects", { method: "POST", body: JSON.stringify({ name: name.value, description: desc.value }) });
+        const j = await r.json();
+        if (j.slug) gotoProject(j.slug);
+      } catch (_) {}
+    });
+    cancel.addEventListener("click", (e) => { e.stopPropagation(); projMenu.classList.remove("open"); });
+    name.addEventListener("keydown", (e) => { if (e.key === "Enter") desc.focus(); });
+    desc.addEventListener("keydown", (e) => { if (e.key === "Enter") create.click(); });
+    row.append(cancel, create);
+    form.append(name, desc, row);
+    projMenu.appendChild(form);
+    name.focus();
+  }
   projName.addEventListener("click", async (e) => {
     e.stopPropagation();
     if (!projMenu.classList.toggle("open")) return;
     projMenu.textContent = "";
-    let list = ["default"];
-    try { list = await (await fetch("/projects")).json(); } catch (_) {}
-    if (!list.includes(PROJECT)) list.push(PROJECT);
+    const list = await fetchProjects();
+    if (!list.some((p) => p.slug === PROJECT)) list.push({ slug: PROJECT, title: PROJECT, description: "" });
     list.forEach((p) => {
       const b = document.createElement("button");
-      b.textContent = p;
-      if (p === PROJECT) b.className = "current";
-      b.addEventListener("click", () => gotoProject(p));
+      b.textContent = p.title || p.slug;
+      if (p.description) b.title = p.description;
+      if (p.slug === PROJECT) b.className = "current";
+      b.addEventListener("click", () => gotoProject(p.slug));
       projMenu.appendChild(b);
     });
     const nb = document.createElement("button");
     nb.textContent = "New project…";
-    nb.addEventListener("click", () => {
-      const name = slugify(prompt("Name the new project. It is a completely separate everything: its own data, chat, agent, and memory."));
-      if (name) gotoProject(name);
-    });
+    nb.addEventListener("click", (ev) => { ev.stopPropagation(); newProjectForm(); });
     projMenu.appendChild(nb);
-    const note = document.createElement("div");
-    note.className = "menu-note";
-    note.textContent = "Each project is fully separate.";
-    projMenu.appendChild(note);
   });
   document.addEventListener("click", (e) => { if (!document.getElementById("proj").contains(e.target)) projMenu.classList.remove("open"); });
 

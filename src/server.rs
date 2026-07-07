@@ -84,12 +84,45 @@ fn project_journal(slug: &str) -> String {
     }
 }
 
+/// A project's human face: its title and one-line description.  The default
+/// project is named by the data manifest (the same file that mounts its data);
+/// created projects carry a project.json written at creation time.
+fn project_meta(slug: &str) -> (String, String) {
+    let read = |path: &str| -> Option<(String, String)> {
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+        let node = if slug == "default" { &v["project"] } else { &v };
+        let title = node["title"].as_str().unwrap_or("").trim().to_string();
+        let desc = node["description"].as_str().unwrap_or("").trim().to_string();
+        (!title.is_empty() || !desc.is_empty()).then_some((title, desc))
+    };
+    let found = if slug == "default" {
+        read("data/manifest.json")
+    } else {
+        read(&format!("data/projects/{slug}/project.json"))
+    };
+    match found {
+        Some((t, d)) if !t.is_empty() => (t, d),
+        Some((_, d)) => (prettify(slug), d),
+        None => (prettify(slug), String::new()),
+    }
+}
+
+/// A readable fallback title from a slug: "wind-farm" → "Wind farm".
+fn prettify(slug: &str) -> String {
+    let words = slug.replace('-', " ");
+    let mut ch = words.chars();
+    match ch.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + ch.as_str(),
+        None => "Project".into(),
+    }
+}
+
 /// Every project that exists on disk (has a journal), plus the default.
 fn list_projects() -> Vec<String> {
     let mut out = vec!["default".to_string()];
     if let Ok(rd) = std::fs::read_dir("data/projects") {
         for e in rd.flatten() {
-            if e.path().join("journal.jsonl").exists() {
+            if e.path().join("journal.jsonl").exists() || e.path().join("project.json").exists() {
                 if let Some(n) = e.file_name().to_str() {
                     out.push(n.to_string());
                 }
@@ -99,6 +132,27 @@ fn list_projects() -> Vec<String> {
     out.sort();
     out.dedup();
     out
+}
+
+/// Create a project: its directory, its project.json, and an empty journal so
+/// it lists.  Never touches an existing project's metadata.
+fn create_project(name: &str, description: &str) -> String {
+    let slug = project_slug(name);
+    if slug == "default" {
+        return slug;
+    }
+    let dir = format!("data/projects/{slug}");
+    let _ = std::fs::create_dir_all(&dir);
+    let meta_path = format!("{dir}/project.json");
+    if !std::path::Path::new(&meta_path).exists() {
+        let meta = serde_json::json!({ "title": name.trim(), "description": description.trim() });
+        let _ = std::fs::write(&meta_path, meta.to_string());
+    }
+    let jpath = format!("{dir}/journal.jsonl");
+    if !std::path::Path::new(&jpath).exists() {
+        let _ = std::fs::write(&jpath, "");
+    }
+    slug
 }
 
 /// Get the project's graph channel, booting the whole stack (graph thread, agent,
@@ -422,7 +476,12 @@ fn handle_conn(mut stream: TcpStream, projects: Projects) -> std::io::Result<()>
             serve_ws(stream, tx, attended)?;
         }
     } else if request_path(&request).is_some_and(|p| p == "/projects") {
-        serve_projects(stream)?;
+        if request.starts_with("POST") {
+            let body = read_body(&mut stream, &request)?;
+            serve_create_project(stream, &body)?;
+        } else {
+            serve_projects(stream)?;
+        }
     } else if let Some(name) = file_request(&request) {
         serve_file(stream, &name)?;
     } else {
@@ -450,9 +509,50 @@ fn project_from_request(request: &str) -> String {
     "default".into()
 }
 
-/// `GET /projects` → the project list as JSON, for the header switcher.
+/// The request body, sized by Content-Length (the headers are already consumed).
+fn read_body(stream: &mut TcpStream, request: &str) -> std::io::Result<String> {
+    use std::io::Read;
+    let len = request
+        .lines()
+        .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().ok()))
+        .flatten()
+        .unwrap_or(0)
+        .min(65536);
+    let mut buf = vec![0u8; len];
+    stream.read_exact(&mut buf)?;
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// `POST /projects` {name, description} → create it, reply with its slug.
+fn serve_create_project(mut stream: TcpStream, body: &str) -> std::io::Result<()> {
+    let v: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+    let name = v["name"].as_str().unwrap_or("").trim();
+    let desc = v["description"].as_str().unwrap_or("").trim();
+    let (status, out) = if name.is_empty() {
+        ("400 Bad Request".to_string(), serde_json::json!({ "error": "a project needs a name" }))
+    } else {
+        ("200 OK".to_string(), serde_json::json!({ "slug": create_project(name, desc) }))
+    };
+    let body = out.to_string();
+    let resp = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    stream.write_all(resp.as_bytes())?;
+    stream.flush()
+}
+
+/// `GET /projects` → the project list with titles + descriptions, for the switcher.
 fn serve_projects(mut stream: TcpStream) -> std::io::Result<()> {
-    let body = serde_json::to_string(&list_projects()).unwrap_or_else(|_| "[]".into());
+    let list: Vec<serde_json::Value> = list_projects()
+        .into_iter()
+        .map(|slug| {
+            let (title, description) = project_meta(&slug);
+            serde_json::json!({ "slug": slug, "title": title, "description": description })
+        })
+        .collect();
+    let body = serde_json::to_string(&list).unwrap_or_else(|_| "[]".into());
     let resp = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         body.len(),
