@@ -669,6 +669,7 @@ const T = (() => {
     if (mode === 'tree' && name === 'assets') return renderTree(V, name, s);
     if (mode === 'timeline' && name === 'events') return renderTimeline(V, name, s);
     if (mode === 'depth') return renderDepthPage(V, name);
+    if (AGG_VIEWS[mode]) return renderAggPanel(V, name, s, mode);
     renderTable(V, name, s);
   }
 
@@ -679,14 +680,28 @@ const T = (() => {
   }
 
   // per-source view modes (§11.15: several lenses over the same data) — every
-  // table source carries a Schema view; some carry richer ones on top, and any
-  // source with a depth column earns the depth-log view
-  const MODES = { assets: [['table', 'Table'], ['tree', 'Hierarchy']], events: [['table', 'Table'], ['timeline', 'Timeline']] };
-  function renderModes(V, name, current, index) {
-    const modes = [...(MODES[name] || [['table', 'Table']])];
-    const sm = sources.get(name);
-    if (sm && depthFieldOf(sm.sample || [])) modes.push(['depth', 'Depth log']);
+  // table source carries a Schema view; the rest are EARNED from the data's own
+  // shape: a date column earns a calendar, a small enum a board, numbers a
+  // histogram (two of them a scatter), lat/lon a map, long text a reading view,
+  // a depth column the depth log.  The switcher shows what the data can do.
+  function modesFor(name) {
+    const rows = sampleRows(name);
+    const modes = [['table', 'Table']];
+    if (name === 'assets') modes.push(['tree', 'Hierarchy']);
+    if (name === 'events') modes.push(['timeline', 'Timeline']);
+    if (dateFieldOf(rows)) modes.push(['calendar', 'Calendar']);
+    if (laneFieldOf(rows)) modes.push(['kanban', 'Board']);
+    const nums = numericFieldsOf(rows);
+    if (nums.length >= 1) modes.push(['histogram', 'Histogram']);
+    if (nums.length >= 2) modes.push(['scatter', 'Scatter']);
+    if (geoFieldsOf(rows)) modes.push(['map', 'Map']);
+    if (proseFieldOf(rows)) modes.push(['reading', 'Reading']);
+    if (depthFieldOf(rows)) modes.push(['depth', 'Depth log']);
     modes.push(['schema', 'Schema']);
+    return modes;
+  }
+  function renderModes(V, name, current, index) {
+    const modes = modesFor(name);
     V.add('div', 'exp:modes', null, index || 0); V.set('exp:modes', 'class', 'view-modes');
     modes.forEach(([m, lbl], i) => { const k = `mode:${name}:${m}`; V.add('button', k, 'exp:modes', i); V.set(k, 'class', 'mode-btn' + (m === current ? ' active' : '')); V.text(k, lbl); });
   }
@@ -721,6 +736,88 @@ const T = (() => {
     return i;
   }
 
+  // ---- what a source's data can DO: cheap shape detection over a sample -------
+  // Each detector reads a bounded sample; the switcher (modesFor) and the agent's
+  // show tool both build on these, so a view is offered exactly when it can render.
+  const SAMPLE_N = 500;
+  function sampleRows(name) {
+    const id = sourceIds.get(name);
+    if (id === undefined) return [];
+    const out = [];
+    for (const r of G.stateOf(id).support()) {
+      out.push(r.asObject());
+      if (out.length >= SAMPLE_N) break;
+    }
+    return out;
+  }
+  const fieldsOf = (rows) => (rows.length ? Object.keys(rows[0]) : []);
+  // a time is an epoch-ms number (2000..2100) or an ISO-dated string
+  const asWhen = (v) => {
+    if (typeof v === 'number' && v > 946684800000 && v < 4102444800000) return v;
+    if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) { const t = Date.parse(v); return Number.isNaN(t) ? null : t; }
+    return null;
+  };
+  function dateFieldOf(rows) {
+    for (const f of fieldsOf(rows)) {
+      const vals = rows.map((r) => r[f]).filter((v) => v != null && v !== '');
+      if (vals.length >= 3 && vals.filter((v) => asWhen(v) != null).length >= vals.length * 0.6) return f;
+    }
+    return null;
+  }
+  // a lane field: a small enum (2..12 values), status-flavored names first
+  function laneFieldOf(rows) {
+    if (rows.length < 4) return null;
+    const candidates = [];
+    for (const f of fieldsOf(rows)) {
+      const vals = rows.map((r) => r[f]).filter((v) => v != null && v !== '' && typeof v !== 'object');
+      if (vals.length < rows.length * 0.5) continue;
+      const distinct = new Set(vals.map(String));
+      if (distinct.size >= 2 && distinct.size <= 12 && vals.length >= distinct.size * 3) {
+        candidates.push([f, /status|state|phase|stage|type|kind|severity|priority|category/i.test(f) ? 0 : 1, distinct.size]);
+      }
+    }
+    candidates.sort((a, b) => a[1] - b[1] || a[2] - b[2]);
+    return candidates.length ? candidates[0][0] : null;
+  }
+  function numericFieldsOf(rows) {
+    const out = [];
+    for (const f of fieldsOf(rows)) {
+      const vals = rows.map((r) => r[f]).filter((v) => v != null && v !== '');
+      if (!vals.length || vals.some((v) => typeof v !== 'number')) continue;
+      if (asWhen(vals[0]) != null) continue; // times chart as calendars, not histograms
+      if (new Set(vals).size < 2) continue;  // constants say nothing
+      out.push(f);
+    }
+    return out;
+  }
+  function geoFieldsOf(rows) {
+    const fs = fieldsOf(rows);
+    const lat = fs.find((f) => /^lat/i.test(f) && rows.every((r) => r[f] == null || (typeof r[f] === 'number' && Math.abs(r[f]) <= 90)));
+    const lon = fs.find((f) => /^(lon|lng)/i.test(f) && rows.every((r) => r[f] == null || (typeof r[f] === 'number' && Math.abs(r[f]) <= 180)));
+    return lat && lon ? { lat, lon } : null;
+  }
+  // prose: a string field long enough to READ, not scan (reports, remarks, notes)
+  function proseFieldOf(rows) {
+    let best = null, bestAvg = 0;
+    for (const f of fieldsOf(rows)) {
+      const vals = rows.map((r) => r[f]).filter((v) => typeof v === 'string' && v.length);
+      if (vals.length < Math.max(2, rows.length * 0.3)) continue;
+      const avg = vals.reduce((a, v) => a + v.length, 0) / vals.length;
+      if (avg > 120 && avg > bestAvg) { best = f; bestAvg = avg; }
+    }
+    return best;
+  }
+  // the field a card or section is NAMED by: title-flavored names first (in THIS
+  // order — an id names a row last, not first), else the first short string
+  function titleFieldOf(rows, skip) {
+    const fs = fieldsOf(rows).filter((f) => f !== skip);
+    for (const want of ['title', 'name', 'label', 'summary', 'subject', 'externalid', 'well', 'id']) {
+      const f = fs.find((x) => x.toLowerCase() === want && rows.some((r) => r[x] != null && r[x] !== ''));
+      if (f) return f;
+    }
+    return fs.find((f) => rows.some((r) => typeof r[f] === 'string' && r[f].length && r[f].length < 80)) || fs[0];
+  }
+
   // ---- virtualized live tables (§11.7 as a viewer): the DOM holds a fixed POOL
   // of rows riding between two spacer rows, so the browser cost is the window, not
   // the dataset.  The client reports where it scrolled ({type:"viewport"} — pure
@@ -735,6 +832,7 @@ const T = (() => {
 
   function purgeLivePanels(from) {
     for (const p of [...liveTables.keys()]) if (p >= from) liveTables.delete(p);
+    for (const p of [...liveViews.keys()]) if (p >= from) liveViews.delete(p);
   }
 
   function renderTable(V, name, s) {
@@ -849,6 +947,9 @@ const T = (() => {
         }
         layoutTable(t);
       }
+      // open aggregate views (calendar, board, histogram…) redraw whole — they
+      // are bounded DOM by construction, so a redraw is a screenful, not a scan
+      for (const [, v] of [...liveViews]) if (v.id === id) v.rerender();
     });
   }
 
@@ -884,6 +985,329 @@ const T = (() => {
     }
     sourcesPanel.set(name, s); // the board tile's counts stay live
     for (const t of liveTables.values()) if (t.name === name) layoutTable(t);
+  }
+
+  // ---- the rest of the visualization set: every view is a lens over the SAME
+  // rows (§11.15), aggregated in the graph and rendered as bounded DOM — a
+  // calendar is ~40 cells whatever the year held, a board caps its cards, a
+  // histogram is its bins.  Each has an Into form so the agent can present it
+  // inline in the conversation, and a panel mode wired into the switcher.
+  // Open aggregate views are LIVE: a delta on their node re-renders the panel.
+  const liveViews = new Map(); // panel -> { id, rerender }
+
+  // the model names fields loosely ("Status", "start time") — resolve against
+  // the real keys and their human titles before giving up
+  function resolveField(name, given, rows) {
+    if (!given) return null;
+    const real = fieldsOf(rows);
+    const canon = (x) => String(x).toLowerCase().replace(/[^a-z0-9]/g, '');
+    return real.find((k) => k === given)
+      || real.find((k) => canon(k) === canon(given))
+      || real.find((k) => canon(fieldTitle(name, k)) === canon(given))
+      || null;
+  }
+
+  // ---- markdown, rendered (the agent's rich-text surface): a safe subset —
+  // headings, lists, fenced code, bold/italic/code, http links — as mutations.
+  function mdInline(b, parent, text, kb) {
+    let i = 0;
+    const parts = String(text).split(/(\*\*[^*]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\(https?:\/\/[^\s)]+\))/g);
+    for (const part of parts) {
+      if (!part) continue;
+      const k = `${kb}i${i++}`;
+      let m;
+      if ((m = /^\*\*([^*]+)\*\*$/.exec(part))) { b.add('strong', k, parent, i); b.text(k, m[1]); }
+      else if ((m = /^\*([^*\n]+)\*$/.exec(part))) { b.add('em', k, parent, i); b.text(k, m[1]); }
+      else if ((m = /^`([^`\n]+)`$/.exec(part))) { b.add('code', k, parent, i); b.text(k, m[1]); }
+      else if ((m = /^\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)$/.exec(part))) {
+        b.add('a', k, parent, i); b.text(k, m[1]); b.set(k, 'href', m[2]); b.set(k, 'target', '_blank'); b.set(k, 'rel', 'noopener');
+      } else { b.add('span', k, parent, i); b.text(k, part); }
+    }
+  }
+  function renderMarkdownInto(root, pfx, text) {
+    const b = vbuild(root, pfx);
+    b.add('div', 'md', null, 0); b.set('md', 'class', 'md-body');
+    const lines = String(text || '').split('\n');
+    let i = 0, blk = 0, list = null, para = [];
+    const flushPara = () => {
+      if (!para.length) return;
+      const k = `p${blk++}`;
+      b.add('p', k, 'md', blk); mdInline(b, k, para.join(' '), k);
+      para = [];
+    };
+    const flushList = () => { list = null; };
+    while (i < lines.length) {
+      const ln = lines[i];
+      if (/^```/.test(ln)) {
+        flushPara(); flushList();
+        const code = [];
+        i++;
+        while (i < lines.length && !/^```/.test(lines[i])) code.push(lines[i++]);
+        i++;
+        const k = `c${blk++}`;
+        b.add('pre', k, 'md', blk); b.text(k, code.join('\n'));
+        continue;
+      }
+      let m;
+      if ((m = /^(#{1,4})\s+(.*)$/.exec(ln))) {
+        flushPara(); flushList();
+        const k = `h${blk++}`;
+        b.add('div', k, 'md', blk); b.set(k, 'class', `md-h${m[1].length}`); mdInline(b, k, m[2], k);
+      } else if ((m = /^\s*(?:[-*]|\d+\.)\s+(.*)$/.exec(ln))) {
+        flushPara();
+        const ordered = /^\s*\d+\./.test(ln);
+        if (!list || list.ordered !== ordered) {
+          const lk = `l${blk++}`;
+          b.add(ordered ? 'ol' : 'ul', lk, 'md', blk);
+          list = { key: lk, n: 0, ordered };
+        }
+        const k = `${list.key}x${list.n}`;
+        b.add('li', k, list.key, list.n++); mdInline(b, k, m[1], k);
+      } else if (/^\s*$/.test(ln)) {
+        flushPara(); flushList();
+      } else {
+        flushList(); para.push(ln.trim());
+      }
+      i++;
+    }
+    flushPara();
+  }
+
+  // ---- calendar: rows bucketed per day on their date field, the last months
+  // that actually hold data, each a 7-wide grid with count-shaded cells.
+  function renderCalendarInto(root, pfx, name, opts) {
+    const rows = rowsOf(name);
+    const sample = rows.slice(0, SAMPLE_N);
+    const field = resolveField(name, opts && opts.field, sample) || dateFieldOf(sample);
+    const b = vbuild(root, pfx);
+    b.add('div', 'note', null, 0); b.set('note', 'class', 'explorer-note');
+    if (!field) { b.text('note', 'no date field to lay on a calendar'); return; }
+    const perDay = new Map(); // 'YYYY-MM-DD' -> count
+    let dated = 0;
+    for (const r of rows) {
+      const t = asWhen(r[field]);
+      if (t == null) continue;
+      dated++;
+      const d = new Date(t);
+      const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+      perDay.set(key, (perDay.get(key) || 0) + 1);
+    }
+    if (!perDay.size) { b.text('note', `no readable dates in ${fieldTitle(name, field)}`); return; }
+    const months = [...new Set([...perDay.keys()].map((k) => k.slice(0, 7)))].sort();
+    const shown = months.slice(-(Number(opts && opts.months) || 6));
+    const counts = [...perDay.values()].sort((a, c) => a - c);
+    const q = (p) => counts[Math.min(counts.length - 1, Math.floor(p * counts.length))];
+    const hi = q(0.85), mid = q(0.5);
+    b.text('note', `${fmtInt(dated)} rows across ${fmtInt(perDay.size)} days · by ${fieldTitle(name, field)}`
+      + (months.length > shown.length ? ` · latest ${shown.length} of ${months.length} months` : ''));
+    const MN = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    shown.forEach((mo, mi) => {
+      const [yy, mm] = mo.split('-').map(Number);
+      const mk = `m${mi}`;
+      b.add('div', mk, null, 1 + mi); b.set(mk, 'class', 'cal-month');
+      b.add('div', `${mk}t`, mk, 0); b.set(`${mk}t`, 'class', 'cal-title'); b.text(`${mk}t`, `${MN[mm - 1]} ${yy}`);
+      b.add('div', `${mk}g`, mk, 1); b.set(`${mk}g`, 'class', 'cal-grid');
+      ['M', 'T', 'W', 'T', 'F', 'S', 'S'].forEach((w, wi) => {
+        b.add('div', `${mk}w${wi}`, `${mk}g`, wi); b.set(`${mk}w${wi}`, 'class', 'cal-wd'); b.text(`${mk}w${wi}`, w);
+      });
+      const firstDow = (new Date(Date.UTC(yy, mm - 1, 1)).getUTCDay() + 6) % 7; // Monday-start
+      const days = new Date(Date.UTC(yy, mm, 0)).getUTCDate();
+      for (let p = 0; p < firstDow; p++) { b.add('div', `${mk}e${p}`, `${mk}g`, 7 + p); }
+      for (let d = 1; d <= days; d++) {
+        const key = `${mo}-${String(d).padStart(2, '0')}`;
+        const n = perDay.get(key) || 0;
+        const ck = `${mk}d${d}`;
+        b.add('div', ck, `${mk}g`, 7 + firstDow + d - 1);
+        b.set(ck, 'class', 'cal-day' + (n ? (n >= hi ? ' c3' : n >= mid ? ' c2' : ' c1') : ''));
+        b.add('span', `${ck}n`, ck, 0); b.set(`${ck}n`, 'class', 'cal-n'); b.text(`${ck}n`, d);
+        if (n) { b.add('span', `${ck}c`, ck, 1); b.set(`${ck}c`, 'class', 'cal-c'); b.text(`${ck}c`, n); b.set(ck, 'title', `${n} on ${key}`); }
+      }
+    });
+  }
+
+  // ---- board (kanban): rows grouped into lanes by a small enum, a capped stack
+  // of cards per lane — the overview a status column is FOR.
+  function renderKanbanInto(root, pfx, name, opts) {
+    const rows = rowsOf(name);
+    const sample = rows.slice(0, SAMPLE_N);
+    const lane = resolveField(name, opts && (opts.lane || opts.field), sample) || laneFieldOf(sample);
+    const b = vbuild(root, pfx);
+    b.add('div', 'note', null, 0); b.set('note', 'class', 'explorer-note');
+    if (!lane) { b.text('note', 'no lane field: a board needs a column with a handful of values'); return; }
+    const titleF = titleFieldOf(sample, lane);
+    const dateF = dateFieldOf(sample);
+    const groups = new Map();
+    for (const r of rows) {
+      const v = r[lane] == null || r[lane] === '' ? '(empty)' : String(r[lane]);
+      if (!groups.has(v)) groups.set(v, []);
+      groups.get(v).push(r);
+    }
+    const lanes = [...groups.entries()].sort((a, c) => c[1].length - a[1].length);
+    const LANES = 8, CARDS = 25;
+    const shown = lanes.slice(0, LANES);
+    b.text('note', `${fmtInt(rows.length)} rows by ${fieldTitle(name, lane)}`
+      + (lanes.length > LANES ? ` · ${lanes.length - LANES} smaller lanes folded` : ''));
+    b.add('div', 'kb', null, 1); b.set('kb', 'class', 'kanban');
+    shown.forEach(([v, list], li) => {
+      const lk = `L${li}`;
+      b.add('div', lk, 'kb', li); b.set(lk, 'class', 'klane');
+      b.add('div', `${lk}h`, lk, 0); b.set(`${lk}h`, 'class', 'klane-h');
+      b.add('span', `${lk}hn`, `${lk}h`, 0); b.text(`${lk}hn`, v);
+      b.add('span', `${lk}hc`, `${lk}h`, 1); b.set(`${lk}hc`, 'class', 'klane-c'); b.text(`${lk}hc`, fmtInt(list.length));
+      list.slice(0, CARDS).forEach((r, ci) => {
+        const ck = `${lk}c${ci}`;
+        b.add('div', ck, lk, 1 + ci); b.set(ck, 'class', 'kcard');
+        b.add('div', `${ck}t`, ck, 0); b.set(`${ck}t`, 'class', 'kcard-t');
+        b.text(`${ck}t`, r[titleF] == null ? '(untitled)' : String(r[titleF]));
+        const when = dateF ? asWhen(r[dateF]) : null;
+        if (when != null) { b.add('div', `${ck}d`, ck, 1); b.set(`${ck}d`, 'class', 'kcard-d'); b.text(`${ck}d`, fmtDate(when)); }
+      });
+      if (list.length > CARDS) {
+        const mk = `${lk}m`;
+        b.add('div', mk, lk, 1 + CARDS); b.set(mk, 'class', 'kcard-more'); b.text(mk, `and ${fmtInt(list.length - CARDS)} more`);
+      }
+    });
+  }
+
+  // ---- histogram: a numeric field in ~28 bins (a non-numeric field falls back
+  // to a bar per value) — the distribution at a glance, any row count.
+  function renderHistogramInto(root, pfx, name, opts) {
+    const rows = rowsOf(name);
+    const sample = rows.slice(0, SAMPLE_N);
+    const field = resolveField(name, opts && opts.field, sample) || numericFieldsOf(sample)[0] || laneFieldOf(sample);
+    const b = vbuild(root, pfx);
+    b.add('div', 'note', null, 0); b.set('note', 'class', 'explorer-note');
+    if (!field) { b.text('note', 'no numeric field to bin'); return; }
+    const numeric = sample.some((r) => typeof r[field] === 'number');
+    let bars; // [label, count][]
+    if (numeric) {
+      const vals = rows.map((r) => r[field]).filter((v) => typeof v === 'number');
+      if (!vals.length) { b.text('note', `${fieldTitle(name, field)} holds no numbers`); return; }
+      const min = Math.min(...vals), max = Math.max(...vals);
+      const BINS = Math.min(28, Math.max(6, new Set(vals).size));
+      const w = (max - min) / BINS || 1;
+      const counts = new Array(BINS).fill(0);
+      for (const v of vals) counts[Math.min(BINS - 1, Math.floor((v - min) / w))]++;
+      bars = counts.map((c, bi) => [fmtNum(min + bi * w), c]);
+      b.text('note', `${fmtInt(vals.length)} values of ${fieldTitle(name, field)} · ${fmtNum(min)} to ${fmtNum(max)} · ${BINS} bins`);
+    } else {
+      const counts = new Map();
+      for (const r of rows) { const v = r[field] == null || r[field] === '' ? '(empty)' : String(r[field]); counts.set(v, (counts.get(v) || 0) + 1); }
+      bars = [...counts.entries()].sort((a, c) => c[1] - a[1]).slice(0, 20);
+      b.text('note', `${fmtInt(rows.length)} rows by ${fieldTitle(name, field)}`
+        + (counts.size > 20 ? ` · top 20 of ${counts.size} values` : ''));
+    }
+    const W = 1000, H = 320, pad = 46;
+    const peak = Math.max(...bars.map((x) => x[1]), 1);
+    b.add('svg', 'svg', null, 1); b.set('svg', 'viewBox', `0 0 ${W} ${H}`); b.set('svg', 'class', 'chart');
+    b.add('line', 'ax', 'svg', 0); b.set('ax', 'x1', pad); b.set('ax', 'y1', H - pad); b.set('ax', 'x2', W - pad); b.set('ax', 'y2', H - pad); b.set('ax', 'class', 'chart-axis');
+    const bw = (W - 2 * pad) / bars.length;
+    bars.forEach(([label, c], bi) => {
+      const h = (c / peak) * (H - 2 * pad);
+      const k = `b${bi}`;
+      b.add('rect', k, 'svg', 1 + bi);
+      b.set(k, 'x', (pad + bi * bw + 1).toFixed(1)); b.set(k, 'y', (H - pad - h).toFixed(1));
+      b.set(k, 'width', Math.max(1, bw - 2).toFixed(1)); b.set(k, 'height', Math.max(0.5, h).toFixed(1));
+      b.set(k, 'class', 'chart-bar'); b.set(k, 'title', `${label}: ${c}`);
+    });
+    b.add('text', 'pk', 'svg', 1 + bars.length); b.set('pk', 'x', pad - 8); b.set('pk', 'y', pad + 4); b.set('pk', 'class', 'chart-lbl'); b.text('pk', fmtInt(peak));
+    b.add('text', 'x0', 'svg', 2 + bars.length); b.set('x0', 'x', pad); b.set('x0', 'y', H - pad + 16); b.set('x0', 'class', 'chart-xlbl'); b.text('x0', bars[0][0]);
+    b.add('text', 'x1', 'svg', 3 + bars.length); b.set('x1', 'x', W - pad); b.set('x1', 'y', H - pad + 16); b.set('x1', 'class', 'chart-xlbl endlbl'); b.text('x1', bars[bars.length - 1][0]);
+  }
+
+  // ---- scatter and map: two numbers against each other; a map is the same
+  // picture with lat/lon axes and the aspect the latitude implies.
+  function renderScatterInto(root, pfx, name, opts) {
+    const rows = rowsOf(name);
+    const sample = rows.slice(0, SAMPLE_N);
+    const geo = opts && opts.geo ? geoFieldsOf(sample) : null;
+    const nums = numericFieldsOf(sample);
+    const fx = geo ? geo.lon : (resolveField(name, opts && opts.x, sample) || nums[0]);
+    const fy = geo ? geo.lat : (resolveField(name, opts && opts.y, sample) || nums.find((f) => f !== fx));
+    const b = vbuild(root, pfx);
+    b.add('div', 'note', null, 0); b.set('note', 'class', 'explorer-note');
+    if (!fx || !fy) { b.text('note', geo ? 'no lat/lon pair found' : 'a scatter needs two numeric fields'); return; }
+    let pts = [];
+    for (const r of rows) if (typeof r[fx] === 'number' && typeof r[fy] === 'number') pts.push([r[fx], r[fy]]);
+    if (!pts.length) { b.text('note', 'no rows carry both fields'); return; }
+    const CAP = 1500;
+    const totalPts = pts.length;
+    if (totalPts > CAP) { const step = Math.ceil(totalPts / CAP); pts = pts.filter((_, i) => i % step === 0); }
+    const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+    const xmin = Math.min(...xs), xmax = Math.max(...xs), ymin = Math.min(...ys), ymax = Math.max(...ys);
+    const W = 1000, pad = 50;
+    // a map keeps ground proportions: squash x by cos(mid-latitude)
+    const aspect = geo ? Math.max(0.2, Math.cos(((ymin + ymax) / 2) * Math.PI / 180)) : null;
+    const H = geo
+      ? Math.max(240, Math.min(720, Math.round((W - 2 * pad) * ((ymax - ymin) || 1) / (((xmax - xmin) || 1) * aspect)) + 2 * pad))
+      : 460;
+    const sx = (v) => pad + (xmax > xmin ? (v - xmin) / (xmax - xmin) : 0.5) * (W - 2 * pad);
+    const sy = (v) => (H - pad) - (ymax > ymin ? (v - ymin) / (ymax - ymin) : 0.5) * (H - 2 * pad);
+    b.text('note', `${fmtInt(pts.length)}${pts.length < totalPts ? ` of ${fmtInt(totalPts)}` : ''} points · ${fieldTitle(name, fx)} × ${fieldTitle(name, fy)}`);
+    b.add('svg', 'svg', null, 1); b.set('svg', 'viewBox', `0 0 ${W} ${H}`); b.set('svg', 'class', 'chart');
+    b.add('line', 'ax', 'svg', 0); b.set('ax', 'x1', pad); b.set('ax', 'y1', H - pad); b.set('ax', 'x2', W - pad); b.set('ax', 'y2', H - pad); b.set('ax', 'class', 'chart-axis');
+    b.add('line', 'ay', 'svg', 1); b.set('ay', 'x1', pad); b.set('ay', 'y1', pad); b.set('ay', 'x2', pad); b.set('ay', 'y2', H - pad); b.set('ay', 'class', 'chart-axis');
+    pts.forEach((p, i) => {
+      const k = `d${i}`;
+      b.add('circle', k, 'svg', 2 + i);
+      b.set(k, 'cx', sx(p[0]).toFixed(1)); b.set(k, 'cy', sy(p[1]).toFixed(1)); b.set(k, 'r', '2.2'); b.set(k, 'class', 'chart-dot');
+    });
+    const n = 2 + pts.length;
+    b.add('text', 'ymax', 'svg', n); b.set('ymax', 'x', pad - 8); b.set('ymax', 'y', pad + 4); b.set('ymax', 'class', 'chart-lbl'); b.text('ymax', fmtNum(ymax));
+    b.add('text', 'ymin', 'svg', n + 1); b.set('ymin', 'x', pad - 8); b.set('ymin', 'y', H - pad); b.set('ymin', 'class', 'chart-lbl'); b.text('ymin', fmtNum(ymin));
+    b.add('text', 'x0', 'svg', n + 2); b.set('x0', 'x', pad); b.set('x0', 'y', H - pad + 16); b.set('x0', 'class', 'chart-xlbl'); b.text('x0', fmtNum(xmin));
+    b.add('text', 'x1', 'svg', n + 3); b.set('x1', 'x', W - pad); b.set('x1', 'y', H - pad + 16); b.set('x1', 'class', 'chart-xlbl endlbl'); b.text('x1', fmtNum(xmax));
+  }
+
+  // ---- reading view: long-text rows as sections you READ — heading from the
+  // row's name, date alongside, body rendered as markdown (plain prose passes
+  // through unharmed).  Reports become a document instead of truncated cells.
+  function renderReadingInto(root, pfx, name, opts) {
+    const rows = rowsOf(name);
+    const sample = rows.slice(0, SAMPLE_N);
+    const prose = resolveField(name, opts && opts.field, sample) || proseFieldOf(sample);
+    const b = vbuild(root, pfx);
+    b.add('div', 'note', null, 0); b.set('note', 'class', 'explorer-note');
+    if (!prose) { b.text('note', 'no long-text field to read'); return; }
+    const titleF = titleFieldOf(sample, prose);
+    const dateF = dateFieldOf(sample);
+    let secs = rows.filter((r) => typeof r[prose] === 'string' && r[prose].length);
+    if (dateF) secs = secs.slice().sort((a, c) => (asWhen(a[dateF]) || 0) - (asWhen(c[dateF]) || 0));
+    const CAP = 30;
+    b.text('note', `${fmtInt(secs.length)} entries · reading ${fieldTitle(name, prose)}`
+      + (secs.length > CAP ? ` · first ${CAP} shown` : ''));
+    secs.slice(0, CAP).forEach((r, si) => {
+      const sk = `s${si}`;
+      b.add('div', sk, null, 1 + si); b.set(sk, 'class', 'rd-sec');
+      b.add('div', `${sk}h`, sk, 0); b.set(`${sk}h`, 'class', 'rd-h');
+      b.add('span', `${sk}ht`, `${sk}h`, 0); b.set(`${sk}ht`, 'class', 'rd-t');
+      b.text(`${sk}ht`, r[titleF] == null ? `entry ${si + 1}` : String(r[titleF]));
+      const when = dateF ? asWhen(r[dateF]) : null;
+      if (when != null) { b.add('span', `${sk}hd`, `${sk}h`, 1); b.set(`${sk}hd`, 'class', 'rd-d'); b.text(`${sk}hd`, fmtDate(when)); }
+      b.add('div', `${sk}b`, sk, 1);
+      renderMarkdownInto(`${pfx}:${sk}b`, `${pfx}:${sk}md`, r[prose]);
+    });
+  }
+
+  // the panel form of every aggregate view: header + switcher, the Into body,
+  // and a LIVE registration — a delta on the node redraws the open panel
+  const AGG_VIEWS = {
+    calendar: renderCalendarInto,
+    kanban: renderKanbanInto,
+    histogram: renderHistogramInto,
+    scatter: (root, pfx, name, opts) => renderScatterInto(root, pfx, name, opts || {}),
+    map: (root, pfx, name, opts) => renderScatterInto(root, pfx, name, Object.assign({ geo: true }, opts || {})),
+    reading: renderReadingInto,
+  };
+  function renderAggPanel(V, name, s, mode) {
+    const i = renderSourceHeader(V, name, s, mode);
+    V.add('div', 'exp:agg', null, i);
+    AGG_VIEWS[mode](V.key('exp:agg'), V.key('exp:agg') + ':v', name, {});
+    const id = sourceIds.get(name);
+    if (id !== undefined) {
+      liveViews.set(V.panel, { id, rerender: () => openSource(name, mode, V.panel) });
+      observeTableNode(id);
+    }
   }
 
   // asset hierarchy tree (§11.15) — the equipment structure, enriched at a glance with
@@ -2065,6 +2489,26 @@ const T = (() => {
   // The agent's `show` tool — render a real component inline in the conversation.
   function doShow(a) {
     const view = String(a.view || 'table').toLowerCase();
+    // the agent's rich-text surface: a markdown note, composed and shown inline
+    if (view === 'note' || view === 'markdown' || view === 'text') {
+      const title = a.title || 'Note';
+      const sq = append('view', { text: title, view: 'note' });
+      renderMarkdownInto(`item:${sq}:body`, `v${sq}`, String(a.text || a.markdown || a.body || ''));
+      return;
+    }
+    // the aggregate views render inline exactly as they do in a panel
+    const AGG_ALIAS = { calendar: 'calendar', kanban: 'kanban', board: 'kanban', histogram: 'histogram', hist: 'histogram', distribution: 'histogram', scatter: 'scatter', map: 'map', geo: 'map', reading: 'reading' };
+    if (AGG_ALIAS[view]) {
+      const mode = AGG_ALIAS[view];
+      const srcName2 = resolveSourceName(a.source || a.name);
+      const s2 = sources.get(srcName2);
+      if (!s2) { append('system', { text: `No source “${srcName2}” to show — mount it first.` }); return; }
+      const title = a.title || `${srcTitle(srcName2)} · ${mode}`;
+      const sq = append('view', { text: title, view: mode });
+      AGG_VIEWS[mode](`item:${sq}:body`, `v${sq}`, srcName2, a);
+      cardOpen(sq, title, { type: 'open_source', name: srcName2, mode });
+      return;
+    }
     if (view === 'document' || view === 'doc') {
       const name = a.name || a.document || a.source;
       if (!name) return;
