@@ -112,15 +112,32 @@
   .act-row.is-done { opacity: .55; }
   .act-row.is-done .act-text { text-decoration: line-through; }
 
-  /* a task's page: title once (the panel tab just says Task), a live now-line,
-     actions before any list */
+  /* a task's page: title once (the panel tab just says Task), then one header row
+     (status chip + actions), then the work as a transcript with a live edge */
   .task-title { font-size: 17px; font-weight: 650; line-height: 1.45; max-width: 58ch; }
   .task-now { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12.5px; margin-top: 8px; }
   .agent-now { margin: 0 0 4px; font-size: 13px; color: var(--ink); }
   .now-dot.live { background: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
-  /* results: a produced issue is tinted like findings everywhere else */
-  .sens-row.res-issue { border-left: 3px solid #d9902a; }
-  .sens-row.res-issue.crit { border-left-color: #8a2e20; }
+  /* the idle now-line carries no dot — a dead bullet reads as clutter; while the
+     agent is actually computing, the client overlays a live line (see .thinking) */
+  .agent-now .now-dot:not(.live) { display: none; }
+  .agent-now.thinking .now-dot { display: block; background: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
+  .agent-now.thinking > span:not(.now-dot):not(.now-live) { display: none; }
+  .task-head { margin-top: 14px; align-items: center; }
+  .task-head .fd-sev { margin-bottom: 0; }
+  /* the task transcript IS the chat, verbatim: it reuses .feed-item text and
+     cards, and the panel body goes white like the conversation so the same
+     classes render the same pixels.  Only two additions: the issue tag, and
+     the "every step" toggle into the machine log. */
+  .panel-body:has(> .story) { background: var(--panel); }
+  .story { display: flex; flex-direction: column; gap: 4px; margin: 14px 0 10px; padding-top: 10px; border-top: 1px solid var(--line); max-width: 68ch; }
+  /* an issue's text is a sentence, not a name — regular weight, reading size */
+  .card-title.issue-t { font-weight: 400; font-size: 13.5px; line-height: 1.55; }
+  .story-tag { display: inline-block; font-size: 10px; text-transform: uppercase; letter-spacing: .07em; font-weight: 650; padding: 2px 9px; border-radius: 99px; margin-bottom: 7px; }
+  .story-tag.tag-warn { background: #f7ead4; color: #8a5a14; }
+  .story-tag.tag-crit { background: #f7dcd6; color: #8a2e20; }
+  .steps-toggle { border: 1px solid var(--line); background: var(--panel); border-radius: 7px; padding: 3px 11px; font: inherit; font-size: 11px; color: var(--muted); cursor: pointer; margin-bottom: 10px; }
+  .steps-toggle:hover { border-color: var(--accent); color: var(--accent); }
   /* task status chips share the finding-chip grammar */
   .fd-sev.task-active { background: var(--accent-soft); color: #7a4a38; }
   .fd-sev.task-open { background: var(--bg); color: var(--muted); border: 1px solid var(--line); }
@@ -185,7 +202,8 @@
   .chain-part { color: var(--ink); }
   .chain-part.here { font-weight: 600; }
   .chain-sep { color: var(--muted); }
-  .code-toggle { margin-left: 8px; border: 1px solid var(--line); background: var(--panel); border-radius: 7px; padding: 1px 9px; font-family: ui-monospace, "SF Mono", monospace; font-size: 10.5px; color: var(--muted); cursor: pointer; }
+  /* one small button at the line's far end, in the UI face — mono is for the code itself */
+  .code-toggle { margin-left: auto; border: 1px solid var(--line); background: var(--panel); border-radius: 7px; padding: 2px 10px; font: inherit; font-size: 11px; color: var(--muted); cursor: pointer; }
   .code-toggle:hover { border-color: var(--accent); color: var(--accent); }
   .fnd-list { max-height: 300px; overflow-y: auto; }
   .fnd { border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; margin: 6px 0; font-size: 12.5px; background: var(--bg); }
@@ -196,6 +214,13 @@
   .pf-v { font-size: 13px; }
 
   /* content lenses inside panels */
+  /* a table panel scrolls ONLY its rows: the header block (description, chain,
+     note, field guide) stays put while the data moves under the sticky th row */
+  .panel-body:has(> .table-scroll) { display: flex; flex-direction: column; overflow: hidden; }
+  .panel-body:has(> .table-scroll) > * { flex: none; }
+  .panel-body:has(> .table-scroll) > .field-guide { max-height: 200px; overflow-y: auto; }
+  .panel-body:has(> .table-scroll) > .table-scroll { flex: 1 1 auto; min-height: 0; }
+  .table-scroll { overflow: auto; margin: 0 -16px -16px; padding: 0 16px 16px; }
   .panel-body table, .view-body table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
   .panel-body th, .view-body th { text-align: left; position: sticky; top: 0; background: var(--bg); color: var(--muted); font-weight: 500; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
   .panel-body td, .view-body td { padding: 5px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; max-width: 300px; overflow: hidden; text-overflow: ellipsis; }
@@ -316,13 +341,27 @@
     const act = document.getElementById("agent-act").textContent;
     const plan = document.getElementById("agent-plan").textContent;
     if (statusOn) {
-      statusLine.textContent = statusBg ? ((doing || "working") + (act ? " · " + act : "")) : "thinking…";
+      // even a foreground "thinking" turn says what it's actually doing (the last step)
+      statusLine.textContent = statusBg
+        ? ((doing || "working") + (act ? " · " + act : ""))
+        : ("thinking…" + (act ? " · " + act : ""));
     } else if (twinPaused) {
       statusLine.textContent = "paused";
     } else {
       // between turns: "waiting" while there's open work; "idle" only when there's none
       statusLine.textContent = (plan || doing) ? `waiting · ${plan || "on: " + doing}` : "idle";
     }
+    // any open What's-happening page mirrors this live: while the agent is
+    // computing, its now-line pulses and says so instead of a stale "last:" line.
+    document.querySelectorAll(".agent-now").forEach((el) => {
+      el.classList.toggle("thinking", statusOn);
+      let live = el.querySelector(".now-live");
+      if (!statusOn) { if (live) live.remove(); return; }
+      if (!live) { live = document.createElement("span"); live.className = "now-live"; el.appendChild(live); }
+      live.textContent = statusBg
+        ? ((doing ? "working on: " + doing : "doing background work") + (act ? " · " + act : ""))
+        : ("thinking about your message…" + (act ? " · " + act : ""));
+    });
   }
 
   // ---- the run control: the live chip is a dropdown — pause/resume the twin ----
@@ -536,8 +575,11 @@
       else if (k === "exp:codebtn") el.addEventListener("click", () => { const code = nodes.get(`p${base}:exp:code`); if (code) code.hidden = !code.hidden; });
       else if (k === "fd:src") el.addEventListener("click", () => openFromEv(base + 1, el.dataset.title || el.dataset.name, { type: "open_source", name: el.dataset.name }));
       else if (/^task:\d+$/.test(k)) el.addEventListener("click", () => openFromEv(base + 1, el.dataset.title || "Task", { type: "open_task", id: Number(k.slice(5)) }));
-      // a step row opens the step's own page; a result card opens the thing itself
-      else if (/^(?:ta|ag):act\d+$/.test(k) || /^ta:res\d+$/.test(k)) el.addEventListener("click", () => { if (el.dataset.ev) openFromEv(base + 1, el.dataset.title || "", JSON.parse(el.dataset.ev)); });
+      // a story card title / step row opens what it points at: the produced
+      // thing, or its step page (log rows are ta:log; card titles are ta:actN:h)
+      else if (/^(?:(?:ta|ag):act|ta:log)\d+(?::h)?$/.test(k)) el.addEventListener("click", () => { if (el.dataset.ev) openFromEv(base + 1, el.dataset.title || "", JSON.parse(el.dataset.ev)); });
+      // "every step" reveals the task's full machine log in place
+      else if (k === "ta:allbtn") el.addEventListener("click", () => { const d = nodes.get(`p${base}:ta:all`); if (d) d.hidden = !d.hidden; });
       // on a step's page: the produced thing, and the task the step served
       else if (k === "sp:open") el.addEventListener("click", () => { if (el.dataset.ev) openFromEv(base + 1, el.dataset.title || "", JSON.parse(el.dataset.ev)); });
       else if (k === "sp:task") el.addEventListener("click", () => openFromEv(base + 1, "Task", { type: "open_task", id: Number(el.dataset.id) }));

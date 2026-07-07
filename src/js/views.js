@@ -258,7 +258,7 @@ class FindingsPanel {
 
   _count() {
     const open = [...this.ids.values()].filter((s) => s !== 'resolved').length;
-    this._emit({ op: 'setText', key: 'tile:findings:h', text: `Findings — ${open}${open < this.ids.size ? ` (${this.ids.size - open} resolved)` : ''}` });
+    this._emit({ op: 'setText', key: 'tile:findings:h', text: `Findings · ${open}${open < this.ids.size ? ` (${this.ids.size - open} resolved)` : ''}` });
   }
 }
 

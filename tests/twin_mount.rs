@@ -309,7 +309,7 @@ fn agent_records_findings_on_the_board() {
     g.twin_agent_tool(r#"{"tool":"finding","args":{"severity":"warn","text":"3 turbines have no vibration sensor","source":"turbines"}}"#);
     let muts = g.twin_from(0);
     assert!(muts.contains("tile:findings"), "findings tile did not appear on the board");
-    assert!(muts.contains("Findings — 1"), "tile title has no count");
+    assert!(muts.contains("Findings · 1"), "tile title has no count");
     assert!(muts.contains("fnd:1") && muts.contains("sev-warn"), "finding card missing: {muts}");
     assert!(muts.contains("no vibration sensor"), "finding text missing");
     // the chat is the user's space: filing a finding posts NOTHING there
@@ -409,7 +409,7 @@ fn the_history_tells_the_origin_story() {
     g.twin_read_source("turbines", &path, "mounted");
     g.twin_agent_tool(r#"{"tool":"describe","args":{"source":"turbines","title":"Turbine fleet","description":"All turbines.","origin":"Cognite CDF (Valhall) · via skill obtain-oid"}}"#);
     let muts = g.twin_from(0);
-    assert!(muts.contains("Installed skill — Obtain open industrial data"), "no skill card: {muts}");
+    assert!(muts.contains("Installed skill: Obtain open industrial data"), "no skill card: {muts}");
     assert!(muts.contains("from Cognite CDF (Valhall)"), "mount card carries no provenance");
 }
 
@@ -477,11 +477,11 @@ fn agent_page_shows_agenda_and_activity_tidily() {
     assert!(d.contains(r#""text":"now""#), "active task not labelled now");
     assert!(d.contains("Recent steps") && d.contains("ranges look sane"), "activity log missing");
 
-    // a task is a THING: it opens to its own page with status, steps, actions
+    // a task is a THING: it opens to its own page with status, its story, actions
     g.twin_event(r#"{"type":"open_task","id":1,"panel":1}"#);
     let t = g.twin_from(0);
     assert!(t.contains("task-active") && t.contains("in progress"), "no status chip: {t}");
-    assert!(t.contains("Steps") && t.contains("ranges look sane"), "task-scoped steps missing");
+    assert!(t.contains(r#""value":"story""#) && t.contains("ranges look sane"), "task-scoped story missing");
     // a RUNNING task never offers "start it" — only its way to done; and the page
     // says what the agent is doing right now
     assert!(!t.contains("ta:work"), "running task still offers a start button: {t}");
@@ -558,16 +558,14 @@ fn task_page_folds_retries_into_a_story() {
 
     g.twin_event(r#"{"type":"open_task","id":1,"panel":0}"#);
     let t = g.twin_from(0);
-    // the retries are folded INTO the success — one created row, no error rows left
-    assert!(t.contains(r#""text":"created""#), "no created label: {t}");
-    assert!(!t.contains(r#""text":"error""#), "resolved failures still shown on the task page: {t}");
-    // the produced lens surfaces as a Result card up top, opening the lens itself
-    assert!(t.contains("Results") && t.contains("ta:res0"), "no results section: {t}");
+    // the retries are folded INTO the success — one created card, no failure lines left
+    assert!(t.contains("Created Hot equipment"), "no created card in the telling: {t}");
+    assert!(!t.contains("Couldn't build Hot equipment"), "resolved failures still shown in the telling: {t}");
+    // the card carries the retry story and opens the lens itself
+    assert!(t.contains("worked after 2 failed attempts"), "card lost the retry story: {t}");
     assert!(t.contains("open_source") && t.contains("lens:hot-equipment"), "result is not openable: {t}");
-    // each step row opens the step's own page, carrying the retry count with it
-    assert!(t.contains("open_step") && t.contains(r#"\"n\":2"#), "step rows lost the retry story: {t}");
-    // the work note reads as a step too
-    assert!(t.contains("scanning the registry"), "work note missing: {t}");
+    // the work note reads as the agent narrating, with the chat's own component
+    assert!(t.contains(r#""value":"feed-item thought""#) && t.contains("scanning the registry"), "work note missing: {t}");
 
     // the created step's page tells the whole story: facts, retries, and the way in
     g.twin_event(r#"{"type":"open_step","seq":4,"n":2,"panel":1}"#);
@@ -589,8 +587,10 @@ fn unresolved_failures_collapse_with_an_attempt_count() {
     g.twin_agent_tool(r#"{"tool":"make_lens","args":{"name":"Doomed","source":"turbines","code":"return rows.map(r => r.x.z)"}}"#);
     g.twin_event(r#"{"type":"open_task","id":1,"panel":0}"#);
     let t = g.twin_from(0);
-    assert!(t.contains("(2 attempts)"), "failures not collapsed with a count: {t}");
-    assert!(t.contains("t-error"), "failed row not toned as an error: {t}");
+    // failures are NOT part of the telling — they fold into the machine log
+    assert!(!t.contains("Couldn't build"), "failure leaked into the telling: {t}");
+    assert!(t.contains("ta:allbtn") && t.contains("every step"), "no way into the full step log: {t}");
+    assert!(t.contains("(2 attempts)") && t.contains("t-error"), "failures not collapsed with a count in the log: {t}");
 }
 
 #[test]

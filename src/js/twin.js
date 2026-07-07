@@ -597,7 +597,7 @@ const T = (() => {
     let i = 1;
     // deep inspection of a derived lens: its description, then the derivation chain
     // as a quiet breadcrumb (walked over the from-links), with the code of this hop
-    // behind a subtle {…} toggle — never a slab of code by default.
+    // behind a small toggle at the line's far end — never a slab of code by default.
     if (s.code) {
       if (s.description) {
         V.add('div', 'exp:desc', null, i++); V.set('exp:desc', 'class', 'src-desc');
@@ -609,12 +609,17 @@ const T = (() => {
         if (pi) { V.add('span', `exp:lsep${pi}`, 'exp:lin', pi * 2 - 1); V.set(`exp:lsep${pi}`, 'class', 'chain-sep'); V.text(`exp:lsep${pi}`, '→'); }
         V.add('span', `exp:lp${pi}`, 'exp:lin', pi * 2); V.set(`exp:lp${pi}`, 'class', 'chain-part' + (pi === parts.length - 1 ? ' here' : '')); V.text(`exp:lp${pi}`, p);
       });
-      V.add('button', 'exp:codebtn', 'exp:lin', parts.length * 2); V.set('exp:codebtn', 'class', 'code-toggle'); V.text('exp:codebtn', '{…} code');
+      V.add('button', 'exp:codebtn', 'exp:lin', parts.length * 2); V.set('exp:codebtn', 'class', 'code-toggle'); V.text('exp:codebtn', 'code');
       V.add('div', 'exp:code', null, i++); V.set('exp:code', 'class', 'lens-code'); V.set('exp:code', 'hidden', 'true');
       V.text('exp:code', s.code);
     }
     V.add('div', 'exp:note', null, i++); V.set('exp:note', 'class', 'explorer-note');
-    V.text('exp:note', `${residenceLabel(s)} · ${cols.length} columns · showing ${rows.length} of ${s.rowcount} rows${chartable ? ' · click a sensor to chart it' : ''}`);
+    const res = residenceLabel(s);
+    const noteBits = [];
+    if (res !== 'derived') noteBits.push(res); // every lens is derived — saying so is noise
+    noteBits.push(`${cols.length} columns`, `showing ${fmtInt(rows.length)} of ${fmtInt(s.rowcount)} rows`);
+    if (chartable) noteBits.push('click a sensor to chart it');
+    V.text('exp:note', noteBits.join(' · '));
     // the field guide: what the twin has understood about each column — inferred
     // structure (keys, references, enums, patterns) and the agent's annotations.
     const lines = fieldLines(name);
@@ -632,14 +637,17 @@ const T = (() => {
         V.text(k, line);
       });
     }
-    V.add('table', 'exp:tbl', null, i);
+    // the table scrolls by itself — description, chain, and field guide stay put
+    V.add('div', 'exp:scroll', null, i);
+    V.set('exp:scroll', 'class', 'table-scroll');
+    V.add('table', 'exp:tbl', 'exp:scroll', 0);
     V.add('thead', 'exp:thead', 'exp:tbl', 0);
     V.add('tr', 'exp:htr', 'exp:thead', 0);
     cols.forEach((c, ci) => {
       V.add('th', `exp:th:${ci}`, 'exp:htr', ci);
       V.text(`exp:th:${ci}`, fieldTitle(name, c));
       const m = fieldMeta.get(`${name}|${c}`);
-      if (m && (m.title || m.description)) V.set(`exp:th:${ci}`, 'title', m.title ? `${c}${m.description ? ' — ' + m.description : ''}` : m.description);
+      if (m && (m.title || m.description)) V.set(`exp:th:${ci}`, 'title', m.title ? `${c}${m.description ? ' · ' + m.description : ''}` : m.description);
     });
     V.add('tbody', 'exp:tb', 'exp:tbl', 1);
     rows.forEach((row, ri) => {
@@ -767,7 +775,7 @@ const T = (() => {
     V.add('div', 'ad:hn', null, 0); V.set('ad:hn', 'class', 'ad-name'); V.text('ad:hn', asset.name || aid);
     V.add('div', 'ad:hd', null, 1); V.set('ad:hd', 'class', 'ad-desc'); V.text('ad:hd', `${asset.description || ''}  ·  id ${aid}`);
 
-    V.add('div', 'ad:st', null, 2); V.set('ad:st', 'class', 'ad-section'); V.text('ad:st', `Sensors — ${sensors.length}`);
+    V.add('div', 'ad:st', null, 2); V.set('ad:st', 'class', 'ad-section'); V.text('ad:st', `Sensors · ${sensors.length}`);
     V.add('div', 'ad:sl', null, 3); V.set('ad:sl', 'class', 'sens-list');
     if (!sensors.length) { V.add('div', 'ad:sn', 'ad:sl', 0); V.set('ad:sn', 'class', 'ad-empty'); V.text('ad:sn', 'no sensors linked to this asset'); }
     sensors.forEach((s, i) => {
@@ -777,7 +785,7 @@ const T = (() => {
       if (s.unit) { V.add('span', `${k}:u`, k, 1); V.set(`${k}:u`, 'class', 'sens-u'); V.text(`${k}:u`, ` [${s.unit}]`); }
     });
 
-    V.add('div', 'ad:et', null, 4); V.set('ad:et', 'class', 'ad-section'); V.text('ad:et', `Maintenance events — ${events.length}`);
+    V.add('div', 'ad:et', null, 4); V.set('ad:et', 'class', 'ad-section'); V.text('ad:et', `Maintenance events · ${events.length}`);
     V.add('div', 'ad:el', null, 5);
     if (!events.length) { V.add('div', 'ad:en', 'ad:el', 0); V.set('ad:en', 'class', 'ad-empty'); V.text('ad:en', 'no events linked (in the sampled events)'); }
     else {
@@ -795,7 +803,7 @@ const T = (() => {
     // so each drawing lands on the dashboard of the equipment it depicts).
     const docs = ((sources.get('documents') || {}).docs || [])
       .filter((d) => (d.assetIds || []).map(String).includes(aid));
-    V.add('div', 'ad:dt', null, 6); V.set('ad:dt', 'class', 'ad-section'); V.text('ad:dt', `Documents — ${docs.length}`);
+    V.add('div', 'ad:dt', null, 6); V.set('ad:dt', 'class', 'ad-section'); V.text('ad:dt', `Documents · ${docs.length}`);
     V.add('div', 'ad:dl', null, 7); V.set('ad:dl', 'class', 'sens-list');
     if (!docs.length) { V.add('div', 'ad:dn', 'ad:dl', 0); V.set('ad:dn', 'class', 'ad-empty'); V.text('ad:dn', 'no drawings reference this asset'); }
     docs.forEach((d, i) => {
@@ -822,7 +830,7 @@ const T = (() => {
     V.text('exp:note', `${total} match${total === 1 ? '' : 'es'} for “${query}”`);
     let idx = 1;
     const sec = (title, n) => {
-      V.add('div', `se:h${idx}`, null, idx); V.set(`se:h${idx}`, 'class', 'ad-section'); V.text(`se:h${idx}`, `${title} — ${n}`); idx++;
+      V.add('div', `se:h${idx}`, null, idx); V.set(`se:h${idx}`, 'class', 'ad-section'); V.text(`se:h${idx}`, `${title} · ${n}`); idx++;
       const lk = `se:l${idx}`; V.add('div', lk, null, idx); V.set(lk, 'class', 'sens-list'); idx++; return lk;
     };
     const card = (key, parent, i, name, sub) => {
@@ -860,13 +868,13 @@ const T = (() => {
 
     // 1) blind spots — maintenance activity but no monitoring
     const blind = [...eByA.entries()].filter(([a, c]) => c >= 2 && !sByA.get(a) && byId.has(a)).sort((x, y) => y[1] - x[1]).slice(0, 15);
-    const lk1 = section(`Blind spots — ${blind.length}`, 'equipment with maintenance events but no sensors monitoring it');
+    const lk1 = section(`Blind spots · ${blind.length}`, 'equipment with maintenance events but no sensors monitoring it');
     if (!blind.length) { V.add('div', 'w:e1', lk1, 0); V.set('w:e1', 'class', 'ad-empty'); V.text('w:e1', 'none found'); }
     blind.forEach(([a, c], i) => card(lk1, 1, i, a, byId.get(a).name || a, `${c} events · 0 sensors`, 'sev-amber'));
 
     // 2) maintenance hotspots — where the work orders concentrate
     const hot = [...eByA.entries()].filter(([a]) => byId.has(a)).sort((x, y) => y[1] - x[1]).slice(0, 10);
-    const lk2 = section(`Maintenance hotspots — top ${hot.length}`, 'assets with the most work orders');
+    const lk2 = section(`Maintenance hotspots · top ${hot.length}`, 'assets with the most work orders');
     hot.forEach(([a, c], i) => card(lk2, 2, i, a, byId.get(a).name || a, `${c} events · ${sByA.get(a) || 0} sensors`, 'sev-blue'));
   }
 
@@ -907,7 +915,7 @@ const T = (() => {
     const files = meta.files || [];
     skills.set(name, { title, description: meta.description || '', files });
     G.submit(skillsSrc, ZSet.fromRows([rec({ name, title, description: meta.description || '' })]), prov('core'));
-    workCard(`Installed skill — ${title}`, meta.description || '',
+    workCard(`Installed skill: ${title}`, meta.description || '',
       files.length ? `capability “${name}” · tooling: ${files.join(', ')}` : `capability “${name}”`, null);
   }
 
@@ -1097,11 +1105,20 @@ const T = (() => {
     entries.forEach((e, i) => stepRow(V, parent, `${keyPfx}${i}`, i, e));
     return entries.length;
   }
-  // What a task's page shows: its own steps, minus housekeeping and minus a note
-  // that just restates the task's title.
+  // A note that merely restates the task's title is noise, not narration.  Match
+  // loosely — word prefixes — so "Identifying X" still echoes the title "Identify X".
+  function restatesTitle(text, title) {
+    const words = (s) => String(s).toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
+    const a = words(text), b = words(title);
+    if (!a.length || !b.length || a.length > b.length + 3) return false;
+    const match = (w, v) => w === v || (w.length > 3 && v.length > 3 && (w.startsWith(v) || v.startsWith(w)));
+    return b.filter((v) => a.some((w) => match(w, v))).length / b.length >= 0.8;
+  }
+  // What a task's page shows: its own steps, minus housekeeping and minus notes
+  // that just restate the task's title.
   function storyOf(tid, taskText) {
     return foldSteps((taskSteps.get(tid) || []).filter((e) =>
-      e.kind !== 'described' && !(e.kind === 'note' && e.text.trim() === String(taskText).trim())));
+      e.kind !== 'described' && !(e.kind === 'note' && restatesTitle(e.text, taskText))));
   }
 
   // A STEP, opened: the one place with everything about it — what kind of step,
@@ -1139,7 +1156,8 @@ const T = (() => {
         : e.kind === 'inspected' ? 'Open the source' : 'Open it';
       V.add('div', 'sp:cta', null, i++); V.set('sp:cta', 'class', 'fd-cta');
       V.add('button', 'sp:open', 'sp:cta', 0); V.set('sp:open', 'class', 'fd-btn primary');
-      V.set('sp:open', 'data-ev', e.ev); V.set('sp:open', 'data-title', e.subject || e.text);
+      // the human title, never the subject slug — panel tabs must read like words
+      V.set('sp:open', 'data-ev', e.ev); V.set('sp:open', 'data-title', e.text || e.subject);
       V.text('sp:open', word);
     }
   }
@@ -1181,9 +1199,11 @@ const T = (() => {
     });
     if (!items.length) { V.add('div', 'ag:none', 'ag:list', 0); V.set('ag:none', 'class', 'ad-empty'); V.text('ag:none', 'no plan yet: the agent lays out its own work here'); }
     let i = 0;
+    let queued = 0; // only ONE thing is next — everything open behind it is "later"
     for (const [id, a] of items) {
       if (a.status === 'done' && i > 8) continue;
-      workRow(V, 'ag:list', `task:${id}`, i++, a.status === 'active' ? 'now' : a.status === 'done' ? 'done' : 'next',
+      const label = a.status === 'active' ? 'now' : a.status === 'done' ? 'done' : (queued++ ? 'later' : 'next');
+      workRow(V, 'ag:list', `task:${id}`, i++, label,
         a.text, a.status === 'active' ? 'is-now' : a.status === 'done' ? 'is-done' : '', true, a.desc);
     }
     V.add('div', 'ag:l2', null, 3); V.set('ag:l2', 'class', 'ad-section'); V.text('ag:l2', 'Recent steps');
@@ -1195,13 +1215,45 @@ const T = (() => {
     stepRows(V, 'ag:acts', 'ag:act', recent);
   }
 
-  // A TASK, opened — built so every element answers a question the user has:
-  //   chip      "is this running?"          (in progress / planned / done)
-  //   title     "what is it?"               (full text, once — the panel tab just says Task)
-  //   now-line  "what is it doing RIGHT NOW?" (live: updates as the agent works)
-  //   buttons   "what can I do?"            (at the top, no scrolling; match the state)
-  //   Results   "what did it produce?"      (the views and issues, clickable)
-  //   Steps     "how did it get there?"     (the story, oldest first, retries folded)
+  // One beat of the TELLING — only what the agent chose to voice (its notes),
+  // chose to flag (issues), or actually produced (created lenses) — rendered
+  // with the CHAT'S OWN components: the same feed-item text and cards, the same
+  // classes, so the two surfaces cannot drift apart.
+  function storyRow(V, parent, key, idx, e) {
+    if (e.kind === 'note') {
+      V.add('div', key, parent, idx); V.set(key, 'class', 'feed-item thought');
+      V.add('div', `${key}:t`, key, 0); V.set(`${key}:t`, 'class', 'text'); V.text(`${key}:t`, e.text);
+      return;
+    }
+    const issue = e.kind === 'flagged';
+    V.add('div', key, parent, idx); V.set(key, 'class', 'feed-item card');
+    let j = 0;
+    if (issue) {
+      V.add('span', `${key}:g`, key, j++); V.set(`${key}:g`, 'class', `story-tag ${e.tone === 'error' ? 'tag-crit' : 'tag-warn'}`);
+      V.text(`${key}:g`, e.tone === 'error' ? 'critical issue' : 'issue');
+    }
+    V.add('div', `${key}:h`, key, j++); V.set(`${key}:h`, 'class', `card-title openable${issue ? ' issue-t' : ''}`);
+    V.text(`${key}:h`, issue ? e.text : `Created ${e.text}`);
+    V.set(`${key}:h`, 'data-ev', e.ev); V.set(`${key}:h`, 'data-title', e.text);
+    // a created lens explains itself: its one-sentence description, like the
+    // chat's mount cards — looked up live, so a later re-describe shows through
+    const made = e.kind === 'built' && e.subject ? sources.get(e.subject) : null;
+    if (made && made.description) {
+      V.add('div', `${key}:s`, key, j++); V.set(`${key}:s`, 'class', 'card-sub'); V.text(`${key}:s`, made.description);
+    }
+    const facts = [e.detail, e.tries ? `worked after ${e.tries} failed attempt${e.tries === 1 ? '' : 's'}` : '']
+      .filter(Boolean).join(' · ');
+    if (facts) { V.add('div', `${key}:d`, key, j++); V.set(`${key}:d`, 'class', 'card-meta'); V.text(`${key}:d`, facts); }
+  }
+
+  // A TASK, opened — a subagent's transcript, rendered EXACTLY like the main chat:
+  // only what the agent chose to tell (notes as speech, issues and created lenses
+  // as cards), a live edge while it runs, and the full machine log (inspections,
+  // failed attempts, retries) behind ONE quiet "every step" toggle at the end.
+  //   title+desc  "what is it?"             (full text, once — the panel tab just says Task)
+  //   status row  "is this running, and what can I do?" (chip + matching actions, one line)
+  //   the telling the agent's own account — the chat's components verbatim
+  //   every step  the honest mechanical sequence, folded, one click away
   function openTask(id, panel) {
     const tid = Number(id);
     const a = agenda.get(tid);
@@ -1214,52 +1266,46 @@ const T = (() => {
     taskPanels.set(V.panel, tid);
     const word = a.status === 'active' ? 'in progress' : a.status === 'done' ? 'done' : 'planned';
     let i = 0;
-    V.add('div', 'ta:st', null, i++); V.set('ta:st', 'class', `fd-sev task-${a.status}`); V.text('ta:st', word);
     V.add('div', 'ta:t', null, i++); V.set('ta:t', 'class', 'task-title'); V.text('ta:t', a.text);
     if (a.desc) { V.add('div', 'ta:desc', null, i++); V.set('ta:desc', 'class', 'ad-desc'); V.text('ta:desc', a.desc); }
-    // what the agent is doing right now — kept live by the activity fold below
-    V.add('div', 'ta:now', null, i++); V.set('ta:now', 'class', 'task-now');
-    if (a.status !== 'active') V.set('ta:now', 'hidden', 'true');
-    V.add('span', 'ta:now:dot', 'ta:now', 0); V.set('ta:now:dot', 'class', 'now-dot live');
-    V.add('span', 'ta:now:t', 'ta:now', 1);
-    const latestNote = [...(taskSteps.get(tid) || [])].reverse().find((e) => e.kind === 'note');
-    V.text('ta:now:t', latestNote ? latestNote.text : 'working on it…');
-    // actions first — visible without scrolling, and matching the state:
-    // a running task doesn't offer "start it"; a done task offers its way back.
-    V.add('div', 'ta:cta', null, i++); V.set('ta:cta', 'class', 'fd-cta');
+    // ONE header row: the status chip and the actions that fit it, side by side.
+    // A running task doesn't offer "start it"; a done task offers its way back.
+    V.add('div', 'ta:cta', null, i++); V.set('ta:cta', 'class', 'fd-cta task-head');
+    V.add('span', 'ta:st', 'ta:cta', 0); V.set('ta:st', 'class', `fd-sev task-${a.status}`); V.text('ta:st', word);
     if (a.status === 'open') {
-      V.add('button', 'ta:work', 'ta:cta', 0); V.set('ta:work', 'class', 'fd-btn primary');
+      V.add('button', 'ta:work', 'ta:cta', 1); V.set('ta:work', 'class', 'fd-btn primary');
       V.set('ta:work', 'data-text', a.text); V.text('ta:work', 'Start now');
     }
-    V.add('button', 'ta:done', 'ta:cta', 1); V.set('ta:done', 'class', 'fd-btn');
+    V.add('button', 'ta:done', 'ta:cta', 2); V.set('ta:done', 'class', 'fd-btn');
     V.set('ta:done', 'data-id', tid);
     V.set('ta:done', 'data-status', a.status === 'done' ? 'open' : 'done');
     V.text('ta:done', a.status === 'done' ? 'Reopen' : 'Mark done');
 
+    // no section header — the transcript IS the page; a hairline sets it off
     const story = storyOf(tid, a.text);
-    // what came out of it: the views and issues this task produced, as openable cards
-    const results = story.filter((e) => (e.kind === 'built' || e.kind === 'flagged') && e.ev);
-    // steps are ACTIONS only — issues live in Results, not mixed into the sequence
-    const steps = story.filter((e) => e.kind !== 'flagged');
-    if (results.length) {
-      V.add('div', 'ta:rl', null, i++); V.set('ta:rl', 'class', 'ad-section');
-      V.text('ta:rl', `Results — ${results.length}`);
-      V.add('div', 'ta:res', null, i++); V.set('ta:res', 'class', 'sens-list');
-      results.forEach((e, ri) => {
-        const k = `ta:res${ri}`;
-        V.add('div', k, 'ta:res', ri);
-        V.set(k, 'class', 'sens-row' + (e.kind === 'flagged' ? ` res-issue${e.tone === 'error' ? ' crit' : ''}` : ''));
-        V.set(k, 'data-ev', e.ev); V.set(k, 'data-title', e.subject || e.text);
-        V.add('div', `${k}:n`, k, 0); V.set(`${k}:n`, 'class', 'sens-n');
-        V.text(`${k}:n`, (e.kind === 'flagged' ? 'Issue: ' : '') + e.text);
-        if (e.detail) { V.add('div', `${k}:d`, k, 1); V.set(`${k}:d`, 'class', 'sens-u'); V.text(`${k}:d`, e.detail); }
-      });
+    const told = story.filter((e) => e.kind === 'note' || ((e.kind === 'built' || e.kind === 'flagged') && e.ev));
+    V.add('div', 'ta:acts', null, i++); V.set('ta:acts', 'class', 'story');
+    if (!told.length) {
+      V.add('div', 'ta:none', 'ta:acts', 0); V.set('ta:none', 'class', 'ad-empty');
+      V.text('ta:none', story.length ? 'working quietly so far' : 'nothing yet');
     }
-    V.add('div', 'ta:l', null, i++); V.set('ta:l', 'class', 'ad-section');
-    V.text('ta:l', steps.length ? `Steps — ${steps.length}` : 'Steps');
-    V.add('div', 'ta:acts', null, i++); V.set('ta:acts', 'class', 'agent-block');
-    if (!steps.length) { V.add('div', 'ta:none', 'ta:acts', 0); V.set('ta:none', 'class', 'ad-empty'); V.text('ta:none', 'nothing yet'); }
-    stepRows(V, 'ta:acts', 'ta:act', steps);
+    told.forEach((e, si) => storyRow(V, 'ta:acts', `ta:act${si}`, si, e));
+    // the live edge: what the agent is doing right now, at the story's end —
+    // kept current by the activity fold while the page is open
+    V.add('div', 'ta:now', null, i++); V.set('ta:now', 'class', 'task-now');
+    if (a.status !== 'active') V.set('ta:now', 'hidden', 'true');
+    V.add('span', 'ta:now:dot', 'ta:now', 0); V.set('ta:now:dot', 'class', 'now-dot live');
+    V.add('span', 'ta:now:t', 'ta:now', 1); V.text('ta:now:t', 'working on it…');
+    // the machine log: everything that actually happened (inspections, failures,
+    // retries — folded), behind one quiet toggle.  Honesty one click away, never
+    // mixed into the telling.
+    const log = story.filter((e) => e.kind !== 'flagged');
+    if (log.length) {
+      V.add('button', 'ta:allbtn', null, i++); V.set('ta:allbtn', 'class', 'steps-toggle');
+      V.text('ta:allbtn', `every step · ${log.length}`);
+      V.add('div', 'ta:all', null, i++); V.set('ta:all', 'class', 'agent-block'); V.set('ta:all', 'hidden', 'true');
+      stepRows(V, 'ta:all', 'ta:log', log);
+    }
   }
 
   // The user re-prioritized or closed a task directly — an event, folded everywhere.
@@ -1440,7 +1486,7 @@ const T = (() => {
     const more = (arr, n) => arr.slice(0, n).join(', ') + (arr.length > n ? ` +${arr.length - n} more` : '');
     const size = meta && meta.rowcount > rows.length
       ? `sampled ${fmtInt(rows.length)} of ${fmtInt(meta.rowcount)} rows`
-      : `${fmtInt(rows.length)} rows`;
+      : `${fmtInt(rows.length)} row${rows.length === 1 ? '' : 's'}`;
     const parts = [size, `${cols.length} columns`];
     if (stats.length) parts.push(more(stats, 2));
     parts.push(gaps.length ? `gaps: ${more(gaps, 3)}` : 'no gaps');
@@ -1592,7 +1638,15 @@ const T = (() => {
     let c; try { c = JSON.parse(json); } catch (_) { return; }
     const a = c.args || {};
     switch (c.tool) {
-      case 'think': append('thought', { text: String(a.text || '') }); break;
+      case 'think': {
+        const t = String(a.text || '');
+        append('thought', { text: t });
+        // a thought voiced while a task is active IS that task's narration —
+        // without this, transcripts are all cards and no speech (the model
+        // thinks 20× for every `work` note it writes).
+        if (activeTaskId) logStep('note', t);
+        break;
+      }
       case 'say': append('agent', { text: String(a.text || '') }); break;
       case 'ask': append('question', { text: String(a.question || a.text || ''), options: a.options || [] }); break;
       case 'record_profile': recordProfile(a.field, a.value); break;
