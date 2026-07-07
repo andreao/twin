@@ -444,6 +444,10 @@ fn graph_loop(
                 // pure navigation is still captured raw, and perceived on the next turn.
                 if etype == "user_message" || etype == "choose" {
                     wake.send(agent::Wake::Steer).ok();
+                } else if etype == "brief" {
+                    // a click that directed the agent: it now heads the plan — start
+                    // on it at the attentive cadence, without a foreground reply turn
+                    wake.send(agent::Wake::Presence).ok();
                 }
             }
             Cmd::AgentTool(json) => {

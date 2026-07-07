@@ -90,6 +90,13 @@ const T = (() => {
         TWIN_MUT.push({ op: 'setAttr', key: `${panelPfx(p)}ta:now`, name: 'hidden', value: r.status === 'active' ? null : 'true' });
       }
     }
+    // an open What's-happening page follows the plan live — a briefed backlog
+    // row visibly moves into the plan where the user just clicked.  Only when
+    // it is the rightmost column: re-rendering goes through viewer(), which
+    // would tear down any page opened to its right.
+    for (const p of [...agentPanels]) {
+      if (![...openPanels].some((q) => q > p)) openAgentPage(p);
+    }
     updateAgentNow();
   });
   G.observe(activitySrc, (delta) => {
@@ -2841,6 +2848,18 @@ const T = (() => {
       openStep(e.seq, e.n, e.panel);
     } else if (e.type === 'set_task') {
       setTaskStatus(e.id, e.status);
+    } else if (e.type === 'brief' && e.text) {
+      // a click that DIRECTS the agent ("investigate this", "document that NOW").
+      // It is captured raw like every action, but it is NOT user speech — nothing
+      // may appear in the chat as if the user typed it.  It becomes the ACTIVE
+      // head of the agent's own plan; the server wakes the agent to take it.
+      const title = String(e.title || e.text).trim().slice(0, 120);
+      let hit = null;
+      for (const [id, a] of agenda) {
+        if (a.status !== 'done' && a.text === title) { hit = id; break; }
+      }
+      if (hit === null) { addAgenda(title, String(e.text)); hit = agendaSeq; }
+      setAgenda(String(hit), 'active');
     } else if (e.type === 'pause' || e.type === 'resume') {
       // captured raw like everything else; the Rust boundary flips the agent's
       // gate.  A quiet system line in the chat confirms the user's own action.
@@ -2893,6 +2912,7 @@ const T = (() => {
     switch (e.type) {
       case 'user_message': return 'sent a message';
       case 'choose': return 'answered a question card';
+      case 'brief': return `directed you to: ${e.title || e.text}`;
       case 'open_source': return `browsed source “${e.name}”${e.mode ? ' as ' + e.mode : ''}`;
       case 'open_document': return `viewed document “${e.name}”`;
       case 'open_asset': return `opened the dashboard of asset ${e.id}`;

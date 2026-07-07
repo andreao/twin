@@ -930,16 +930,19 @@
       // on a step's page: the produced thing, and the task the step served
       else if (k === "sp:open") on(() => { if (el.dataset.ev) openFromEv(base + 1, el.dataset.title || "", JSON.parse(el.dataset.ev)); });
       else if (k === "sp:task") on(() => openFromEv(base + 1, "Task", { type: "open_task", id: Number(el.dataset.id) }));
-      else if (k === "ta:work") on(() => send({ type: "user_message", text: `Start working on “${el.dataset.text}” now: take the next concrete step and show me the result.` }));
+      // a click that DIRECTS the agent is a BRIEF: raw-captured and journaled like
+      // every action, but never rendered as user speech — it lands in the agent's
+      // plan and wakes it (the chat belongs to the user and the agent's own voice)
+      else if (k === "ta:work") on(() => send({ type: "brief", title: el.dataset.text, text: `Take the next concrete step on “${el.dataset.text}” now and show the result.` }));
       else if (k === "ta:done") on(() => {
         send({ type: "set_task", id: Number(el.dataset.id), status: el.dataset.status || "done" });
         openFromEv(base, panels[base] ? panels[base].title : "Task", { type: "open_task", id: Number(el.dataset.id) });
       });
-      else if (k === "fd:investigate") on(() => send({ type: "user_message", text: `Investigate this finding and show me the evidence: “${el.dataset.text}”` }));
+      else if (k === "fd:investigate") on(() => send({ type: "brief", title: `Investigate: ${el.dataset.text}`, text: `Investigate this finding and show the evidence: “${el.dataset.text}”` }));
       // schema gaps have one fix: documentation — buttons and backlog rows brief the agent the same way
-      else if (k === "fd:document" || k === "exp:annbtn") on(() => send({ type: "user_message", text: `Document the fields of ${el.dataset.title}: annotate every field that still lacks a title with a short human title and a one-sentence meaning. If a field's meaning cannot be read from the data, ask me.` }));
-      else if (/^ag:bk\d+$/.test(k)) on(() => { if (el.dataset.doc) send({ type: "user_message", text: `Document the fields of ${el.dataset.doc} NOW: annotate every field that still lacks a title with a short human title and a one-sentence meaning. If a field's meaning cannot be read from the data, ask me.` }); });
-      else if (k === "fd:fix") on(() => send({ type: "user_message", text: `Propose a concrete fix for this finding: “${el.dataset.text}”` }));
+      else if (k === "fd:document" || k === "exp:annbtn") on(() => send({ type: "brief", title: `Document the fields of ${el.dataset.title}`, text: `Document the fields of ${el.dataset.title}: annotate every field that still lacks a title with a short human title and a one-sentence meaning. If a field's meaning cannot be read from the data, ask the user.` }));
+      else if (/^ag:bk\d+$/.test(k)) on(() => { if (el.dataset.doc) send({ type: "brief", title: `Document the fields of ${el.dataset.doc}`, text: `Document the fields of ${el.dataset.doc} NOW: annotate every field that still lacks a title with a short human title and a one-sentence meaning. If a field's meaning cannot be read from the data, ask the user.` }); });
+      else if (k === "fd:fix") on(() => send({ type: "brief", title: `Propose a fix: ${el.dataset.text}`, text: `Propose a concrete fix for this finding: “${el.dataset.text}”` }));
       else if (k === "fd:resolve") on(() => {
         send({ type: "resolve_finding", id: Number(el.dataset.id) });
         openFromEv(base, panels[base] ? panels[base].title : "Finding", { type: "open_finding", id: Number(el.dataset.id) });
