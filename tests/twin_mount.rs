@@ -508,8 +508,10 @@ fn an_empty_plan_shows_the_deterministic_backlog() {
     // turns are being steered through, so "working…" always has a visible why
     g.twin_event(r#"{"type":"open_agent","panel":0}"#);
     let d = g.twin_from(0);
-    assert!(d.contains("document the fields of turbines"), "no backlog row: {d}");
-    assert!(d.contains("4 to go"), "no remaining-count on the backlog row: {d}");
+    // rendered with the same act-row grammar as real plan items — a list, not prose
+    assert!(d.contains("Document the fields of turbines"), "no backlog row: {d}");
+    assert!(d.contains(r#""text":"next""#) && d.contains("act-verb"), "backlog rows lost the plan-list style: {d}");
+    assert!(d.contains("4 fields still need a meaning"), "no remaining-count detail: {d}");
     assert!(!d.contains("no plan yet"), "empty shrug shown despite known work");
 }
 

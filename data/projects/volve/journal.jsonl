@@ -179,3 +179,5 @@
 {"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"field\":\"md\",\"source\":\"witsml\",\"title\":\"Measured Depth\",\"description\":\"The depth measured along the wellbore from the surface.\"}}"}
 {"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"field\":\"tvd\",\"source\":\"witsml\",\"title\":\"True Vertical Depth\",\"description\":\"The vertical depth of the wellbore from a reference datum, independent of its path along the earth's surface.\"}}"}
 {"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"field\":\"kind\",\"source\":\"witsml\",\"title\":\"Record Type\",\"description\":\"The classification of the WITSML record, such as a survey or a drill report, used to differentiate data types in the unified stream.\"}}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"description\":\"The horizontal direction of the wellbore measured in degrees from true north.\",\"field\":\"azi\",\"source\":\"witsml\",\"title\":\"Azimuth\"}}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"field\":\"incl\",\"source\":\"witsml\",\"title\":\"Inclination\",\"description\":\"The angle of the wellbore from the vertical, measured in degrees.\"}}"}

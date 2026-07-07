@@ -48,6 +48,10 @@ enum Outcome {
     Acted,
     /// Nothing worth doing — back off.
     Idled,
+    /// The model produced nothing even though NAMED work remains (agenda items,
+    /// schema gaps) — retry at the tight cadence instead of backing off: an
+    /// attended twin with a backlog keeps cracking on.
+    Stalled,
     /// The user spoke mid-background-turn — drop the work, serve them.
     Preempted,
 }
@@ -173,7 +177,7 @@ fn agent_loop(
                         run_turn(&tx, &model, Mode::Foreground, &wake_rx);
                         idle = BG_FIRST_IDLE;
                     }
-                    Outcome::Acted => idle = BG_BETWEEN,
+                    Outcome::Acted | Outcome::Stalled => idle = BG_BETWEEN,
                     Outcome::Idled => idle = BG_FIRST_IDLE, // just woken — stay attentive
                 }
             }
@@ -190,6 +194,9 @@ fn agent_loop(
                         idle = BG_FIRST_IDLE;
                     }
                     Outcome::Acted => idle = BG_BETWEEN,
+                    // a stall with a backlog retries at the attentive cadence —
+                    // no exponential backoff while named work remains
+                    Outcome::Stalled => idle = BG_FIRST_IDLE,
                     Outcome::Idled => idle = std::cmp::min(idle * 2, BG_MAX_IDLE),
                 }
             }
@@ -226,6 +233,9 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
     // the action tools applied this turn — folded into the answer's quiet
     // "via …" line, so a reply that took work shows how it got there
     let mut steps_taken: Vec<String> = Vec::new();
+    // does NAMED work remain (agenda / schema gaps)?  Decides whether an empty
+    // turn is a rest (back off) or a stall (retry at the tight cadence).
+    let mut work_remains = false;
     for _ in 0..MAX_STEPS {
         if background {
             if let Ok(w) = wake.try_recv() {
@@ -244,6 +254,7 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
         //     (observed failure modes: gemma re-emits near-identical thoughts, and
         //      re-emits the same show/inspect/make_lens until the step cap).
         let gap = annotate_nudge(&ctx);
+        work_remains = gap.is_some() || agenda_head(&ctx).is_some();
         let mut nudge = if background {
             let mut b = BACKGROUND_BRIEF.to_string();
             if let Some((_, _, a)) = &gap {
@@ -390,10 +401,18 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
     if !background && !said && !acted {
         emit(tx, &say_json("What would you like to do next?"));
     }
-    // the between-turns line: an idle outcome says WHY nothing is happening,
+    // the between-turns line: an empty moment says WHY nothing is happening,
     // instead of leaving a bare "idle" for the user to wonder about
-    let detail = if !preempted && !acted && !said {
-        String::from("nothing pressing — resting between checks")
+    let detail = if preempted {
+        String::new()
+    } else if !acted && !said {
+        if work_remains {
+            String::from("stalled on the remaining work — retrying shortly")
+        } else {
+            String::from("nothing pressing — resting between checks")
+        }
+    } else if background && work_remains {
+        String::from("more to do — continuing shortly")
     } else {
         String::new()
     };
@@ -402,6 +421,8 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
         Outcome::Preempted
     } else if acted || said {
         Outcome::Acted
+    } else if work_remains {
+        Outcome::Stalled
     } else {
         Outcome::Idled
     }

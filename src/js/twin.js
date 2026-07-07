@@ -1423,9 +1423,8 @@ const T = (() => {
         V.text('ag:none', 'no plan yet: the agent lays out its own work here');
       }
       backlog.slice(0, 5).forEach((w, bi) => {
-        const k = `ag:bk${bi}`;
-        V.add('div', k, 'ag:list', bi + 1); V.set(k, 'class', 'act-detail');
-        V.text(k, `${bi ? 'then' : 'next'}: document the fields of ${w.title} — ${w.missing} to go`);
+        workRow(V, 'ag:list', `ag:bk${bi}`, bi + 1, bi ? 'then' : 'next',
+          `Document the fields of ${w.title}`, '', false, `${w.missing} fields still need a meaning`);
       });
     }
     let i = 1;
