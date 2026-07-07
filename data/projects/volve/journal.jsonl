@@ -86,3 +86,34 @@
 {"k":"ev","p":"{\"panel\":0,\"title\":\"What’s happening\",\"ts\":1783446517363,\"type\":\"open_agent\"}"}
 {"k":"tool","p":"{\"tool\":\"think\",\"args\":{\"text\":\"Annotating the 'Measured Depth' field in the Formation picks source to provide clear semantics.\"}}"}
 {"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"source\":\"wellpicks\",\"field\":\"MD\",\"title\":\"Measured Depth\",\"description\":\"The depth measured along the wellbore from the surface.\"}}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"source\":\"drillReports\",\"field\":\"comments\",\"title\":\"Driller's Notes\",\"description\":\"The driller's narrative of the day's activities, including equipment status and operational details.\"}}"}
+{"k":"ev","p":"{\"panel\":0,\"title\":\"What’s happening\",\"ts\":1783446935796,\"type\":\"open_agent\"}"}
+{"k":"ev","p":"{\"panel\":0,\"title\":\"What’s happening\",\"ts\":1783446936709,\"type\":\"open_agent\"}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"field\":\"dTimEnd\",\"source\":\"drillReports\",\"title\":\"Report End Time\",\"description\":\"The timestamp marking the end of the reported drilling activity for this specific entry.\"}}"}
+{"k":"ev","p":"{\"panel\":0,\"title\":\"The twin\",\"ts\":1783447020312,\"type\":\"open_board\"}"}
+{"k":"ev","p":"{\"panel\":1,\"title\":\"Schema map\",\"ts\":1783447021792,\"type\":\"open_schema\"}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"field\":\"drillReports\", \"field_name\":\"dTimStart\", \"title\":\"Report Start Time\", \"description\":\"The timestamp marking the start of the reported drilling activity for this specific entry.\"}}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"15-9-F-14:r\",\"panel\":2,\"title\":\"15-9-F-14:r\",\"ts\":1783447028348,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"15-9-F-14\",\"panel\":2,\"title\":\"Well log 15/9-F-14\",\"ts\":1783447028348,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"export:t\",\"panel\":2,\"title\":\"export:t\",\"ts\":1783447033921,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"export\",\"panel\":2,\"title\":\"Engineering export\",\"ts\":1783447033922,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"export:t\",\"panel\":2,\"title\":\"export:t\",\"ts\":1783447036338,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"export\",\"panel\":2,\"title\":\"Engineering export\",\"ts\":1783447036338,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"trajectory:r\",\"panel\":2,\"title\":\"trajectory:r\",\"ts\":1783447037639,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"trajectory\",\"panel\":2,\"title\":\"Wellbore trajectory\",\"ts\":1783447037639,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"trajectory:r\",\"panel\":2,\"title\":\"trajectory:r\",\"ts\":1783447040679,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"trajectory\",\"panel\":2,\"title\":\"Wellbore trajectory\",\"ts\":1783447040680,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"table\",\"name\":\"trajectory\",\"panel\":2,\"title\":\"Wellbore trajectory\",\"ts\":1783447043072,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"trajectory\",\"panel\":2,\"title\":\"Wellbore trajectory\",\"ts\":1783447043606,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"export:r\",\"panel\":2,\"title\":\"export:r\",\"ts\":1783447048812,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"export\",\"panel\":2,\"title\":\"Engineering export\",\"ts\":1783447048813,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"15-9-F-14:t\",\"panel\":2,\"title\":\"15-9-F-14:t\",\"ts\":1783447049289,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"15-9-F-14\",\"panel\":2,\"title\":\"Well log 15/9-F-14\",\"ts\":1783447049289,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"drillReports:r\",\"panel\":2,\"title\":\"drillReports:r\",\"ts\":1783447059497,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"mode\":\"schema\",\"name\":\"drillReports\",\"panel\":2,\"title\":\"Daily drill reports\",\"ts\":1783447059498,\"type\":\"open_source\"}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"source\":\"drillReports\",\"field\":\"dTimStart\",\"title\":\"Report Start Time\",\"description\":\"The timestamp marking the beginning of the reported drilling activity for this entry.\"}}"}
+{"k":"ev","p":"{\"name\":\"export\",\"panel\":1,\"title\":\"Engineering export\",\"ts\":1783447061780,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"name\":\"trajectory\",\"panel\":1,\"title\":\"Wellbore trajectory\",\"ts\":1783447073296,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"target\":{\"type\":\"open_board\"},\"title\":\"The twin\",\"ts\":1783447075011,\"type\":\"star\"}"}
+{"k":"ev","p":"{\"target\":{\"type\":\"open_board\"},\"title\":\"The twin\",\"ts\":1783447075710,\"type\":\"star\"}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"field\":\"mdHoleStart\",\"source\":\"drillReports\",\"title\":\"Start Depth\",\"description\":\"The measured depth at which the drilling operation began for this specific report.\"}}"}

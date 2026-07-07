@@ -218,6 +218,9 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
     let mut stuck = 0;
     let mut idle_overrides = 0;
     let mut idle_item: Option<String> = None;
+    // what this turn is ABOUT, for the live status line: the model's own thought
+    // once it thinks; before that, the work the harness is steering it toward.
+    let mut intent: Option<String> = None;
     for _ in 0..MAX_STEPS {
         if background {
             if let Ok(w) = wake.try_recv() {
@@ -235,11 +238,12 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
         // (c) after a suppressed repeat, the next output MUST be something NEW
         //     (observed failure modes: gemma re-emits near-identical thoughts, and
         //      re-emits the same show/inspect/make_lens until the step cap).
+        let gap = annotate_nudge(&ctx);
         let mut nudge = if background {
             let mut b = BACKGROUND_BRIEF.to_string();
-            if let Some(a) = annotate_nudge(&ctx) {
+            if let Some((_, a)) = &gap {
                 b.push_str("\n\n");
-                b.push_str(&a);
+                b.push_str(a);
             }
             b
         } else {
@@ -264,7 +268,20 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
             nudge.push_str(&format!("\n\nYou said idle, but {work} Idle is NOT allowed while named work remains."));
             idle_item = None;
         }
-        status(format!("thinking with {model}…"));
+        // the live line says what the turn is ABOUT, not the mechanism: the model's
+        // own thought once it has one, else the work the harness is steering toward
+        let line = intent.clone().unwrap_or_else(|| {
+            if !background {
+                String::from("thinking about your message")
+            } else if let Some(item) = agenda_head(&ctx) {
+                format!("working on: {item}")
+            } else if let Some((title, _)) = &gap {
+                format!("working out what the fields of {title} mean")
+            } else {
+                String::from("looking over the twin for useful work")
+            }
+        });
+        status(format!("{line}…"));
         let content = match call_model(model, &ctx, &nudge) {
             Ok(c) => c,
             Err(e) => {
@@ -290,7 +307,7 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
                     .map(|item| format!(
                         "your agenda still has open items — next up: “{item}”. Do a real step on it NOW (inspect / annotate / make_lens / finding / show / work), or mark it done if it truly is."
                     ))
-                    .or_else(|| annotate_nudge(&ctx).map(|_| String::from(
+                    .or_else(|| gap.as_ref().map(|_| String::from(
                         "sources still have fields without a documented meaning. Annotate ONE of them NOW — use the field KEY exactly as it appears in \"fields\" (not its human title), with a short title and one sentence of meaning.",
                     )));
                 if let Some(w) = work {
@@ -304,6 +321,13 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
         }
         if name == "think" {
             thoughts += 1;
+            // the thought IS the intent — the live line carries it from here on
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&tool) {
+                if let Some(t) = v["args"]["text"].as_str() {
+                    let short: String = t.chars().take(90).collect();
+                    intent = Some(short);
+                }
+            }
             if thoughts > 1 {
                 continue; // don't spin on thinking; re-prompt for an action
             }
@@ -395,7 +419,9 @@ fn dedup_key(tool_json: &str) -> String {
 /// One source per nudge; each annotate re-perceives, so a background turn walks
 /// through the gaps field by field.  Lenses are skipped: their columns come from
 /// the mounts, and documenting the mounts is what pays everywhere.
-fn annotate_nudge(ctx: &str) -> Option<String> {
+/// Returns (the source's human title — for the live status line, so the user sees
+/// WHAT is being worked out — and the nudge text for the model).
+fn annotate_nudge(ctx: &str) -> Option<(String, String)> {
     let v: serde_json::Value = serde_json::from_str(ctx).ok()?;
     for s in v["sources"].as_array()? {
         let name = s["name"].as_str().unwrap_or_default();
@@ -415,13 +441,17 @@ fn annotate_nudge(ctx: &str) -> Option<String> {
             .collect();
         if !missing.is_empty() {
             let title = s["title"].as_str().unwrap_or(name);
-            return Some(format!(
-                "SCHEMA GAP: in source \"{name}\" ({title}), the fields {} still have no human title. \
-                 Use annotate on ONE of them NOW — a short title a plant engineer would say, plus one \
-                 sentence of what it MEANS (its profile in \"sources\" already tells you the type, \
-                 references, enums and patterns; add the semantics). If its meaning is genuinely \
-                 unknowable from the data, ask the user instead — one pointed question.",
-                missing.join(", ")
+            return Some((
+                title.to_string(),
+                format!(
+                    "SCHEMA GAP: in source \"{name}\" ({title}), the fields {} still have no human title. \
+                     Use annotate on ONE of them NOW — the \"field\" arg must be the KEY exactly as listed, \
+                     with a short title a plant engineer would say, plus one sentence of what it MEANS \
+                     (its profile in \"sources\" already tells you the type, references, enums and \
+                     patterns; add the semantics). If its meaning is genuinely unknowable from the data, \
+                     ask the user instead — one pointed question.",
+                    missing.join(", ")
+                ),
             ));
         }
     }
@@ -577,7 +607,8 @@ mod tests {
                 "id: number · unique key",
                 "assetId: number · references assets.id",
                 "unit: “Engineering unit” · string · the unit of measure"]}]}"#;
-        let n = annotate_nudge(ctx).unwrap();
+        let (title, n) = annotate_nudge(ctx).unwrap();
+        assert_eq!(title, "Sensor catalogue", "subject is the source's human title");
         assert!(n.contains("Sensor catalogue"), "nudge names the source: {n}");
         assert!(n.contains("id, assetId"), "untitled fields listed: {n}");
         assert!(!n.contains("unit"), "annotated field must not be re-nudged: {n}");
