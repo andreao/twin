@@ -32,6 +32,7 @@ const T = (() => {
   const findingsSrc = G.source('findings', false);
   const lensesSrc = G.source('lenses', false);
   const describeSrc = G.source('describe', false); // human titles/descriptions for any lens or source
+  const schemaSrc = G.source('schema', false);     // inferred + annotated schema claims, per field
 
   // The UI is TWO concepts: the conversation (feed) and the twin — one board of
   // lens tiles that grows as the agent works.  Sources are the rawest lenses;
@@ -195,6 +196,233 @@ const T = (() => {
     }
     return cols;
   }
+  // ---- schema inference (§8: schema is event-sourced data, not metadata) -----
+  // The twin understands its data in two passes.  This is the FIRST: a statistical
+  // profiler — pure computation, no model — that runs the moment a source lands.
+  // Every conclusion is a CLAIM appended to the `schema` stream (field, facts,
+  // author, lineage), folded into `fieldMeta` below.  The second pass is semantic:
+  // the agent's `annotate` tool appends claims about what fields MEAN, which
+  // override the profiler's on fold.  Nothing is ever edited in place.
+  const fieldMeta = new Map(); // `${source}|${field}` -> folded claims (last non-empty wins)
+  const profiles = new Map();  // source -> per-column value sets, for cross-source link detection
+  const linked = new Set();    // reference claims already made (claim once, ever)
+  G.observe(schemaSrc, (delta) => {
+    for (const [row] of delta.entries()) {
+      const r = row.asObject();
+      const k = `${r.source}|${r.field}`;
+      const m = fieldMeta.get(k) || {};
+      for (const key of ['type', 'role', 'ref', 'refField', 'values', 'pattern', 'coverage', 'overlap', 'empty', 'title', 'description', 'author']) {
+        if (r[key] != null && r[key] !== '') m[key] = r[key];
+      }
+      fieldMeta.set(k, m);
+    }
+  });
+  function claim(source, field, facts, author) {
+    G.submit(schemaSrc, ZSet.fromRows([rec(Object.assign({ source, field }, facts))]), prov(author || 'profiler'));
+  }
+
+  // Mine the dominant SHAPE of a string column — tag conventions, composite ids.
+  // Tiered generalization: digit runs → '#'; if that doesn't converge, uppercase
+  // codes (2+ letters) → 'A' runs; if that doesn't either, the common prefix.
+  // The mined template is exact enough to parse against — rows that don't match
+  // the dominant shape are the interesting ones.
+  function minePattern(vals) {
+    if (vals.length < 5) return null;
+    const sample = vals.slice(0, 400).map(String);
+    const digitMask = (s) => s.replace(/[0-9]+/g, (d) => '#'.repeat(Math.min(d.length, 6)));
+    const top = (sigs) => {
+      const m = new Map();
+      for (const t of sigs) m.set(t, (m.get(t) || 0) + 1);
+      let b = null;
+      for (const e of m) if (!b || e[1] > b[1]) b = e;
+      return b;
+    };
+    const pct = (n) => Math.round((n / sample.length) * 100);
+    const sigs1 = sample.map(digitMask);
+    let [t, n] = top(sigs1);
+    if (t.includes('#') && n / sample.length >= 0.6) return { template: t, coverage: pct(n) };
+    const sigs2 = sigs1.map((s) => s.replace(/[A-Z]{2,}/g, (a) => 'A'.repeat(Math.min(a.length, 6))));
+    [t, n] = top(sigs2);
+    if (t.includes('#') && n / sample.length >= 0.6) return { template: t, coverage: pct(n) };
+    // No full template converged — look for a DOMINANT prefix instead: cluster
+    // by the leading characters, take the biggest cluster, and report its common
+    // prefix with honest coverage.  A column that is 82% "VAL_##-…" and 18%
+    // junk is a convention WITH violations — the violations are the insight.
+    const [seed, hits] = top(sigs1.map((s) => s.slice(0, 6)));
+    if (seed.length >= 4 && hits / sample.length >= 0.5) {
+      const cluster = sigs1.filter((s) => s.startsWith(seed));
+      let pre = cluster[0];
+      for (const s of cluster) {
+        let i = 0;
+        while (i < pre.length && i < s.length && pre[i] === s[i]) i += 1;
+        pre = pre.slice(0, i);
+      }
+      if (pre.length >= 4) return { template: `starts ${pre}…`, coverage: pct(cluster.length) };
+    }
+    return null;
+  }
+
+  // Profile one source: types, gaps, keys, constants, enums, shapes, duplicate
+  // columns — each fact a schema claim.  Deterministic and model-free, so it
+  // re-derives identically on every boot (mounts are not journaled).
+  const PROFILE_ROWS = 2000;
+  const DISTINCT_CAP = PROFILE_ROWS; // within the sample, distinct sets are never truncated
+  function profileSource(name) {
+    const id = sourceIds.get(name);
+    const meta = sources.get(name);
+    if (id === undefined || !meta || meta.kind !== 'table') return;
+    const rows = G.stateOf(id).support().slice(0, PROFILE_ROWS).map((r) => r.asObject());
+    if (rows.length < 2) return;
+    const cols = Object.keys(meta.schema || {});
+    const prof = {};
+    for (const c of cols) {
+      const vals = rows.map((r) => r[c]).filter((v) => v != null && v !== '');
+      const distinct = new Set();
+      for (const v of vals) {
+        distinct.add(String(v));
+        if (distinct.size > DISTINCT_CAP) break;
+      }
+      const capped = distinct.size > DISTINCT_CAP;
+      const types = new Set(vals.map((v) => typeof v));
+      const type = types.size === 1 ? [...types][0] : (types.size ? 'mixed' : 'empty');
+      const unique = !capped && vals.length === rows.length && distinct.size === rows.length;
+      const facts = { type };
+      const emptyPct = Math.round(((rows.length - vals.length) / rows.length) * 100);
+      if (rows.length > vals.length) facts.empty = emptyPct || 1;
+      if (unique) facts.role = 'key';
+      else if (!capped && distinct.size === 1) {
+        facts.role = 'constant';
+        facts.values = [...distinct][0];
+      } else if (!capped && type === 'string' && distinct.size >= 2 && distinct.size <= 12 && vals.length >= distinct.size * 3) {
+        facts.role = 'enum';
+        facts.values = [...distinct].slice(0, 8).join(', ') + (distinct.size > 8 ? ` +${distinct.size - 8} more` : '');
+      }
+      if (type === 'string' && !facts.values) {
+        const p = minePattern(vals);
+        if (p) {
+          facts.pattern = p.template;
+          facts.coverage = p.coverage;
+        }
+      }
+      prof[c] = { distinct, capped, unique, type };
+      claim(name, c, facts, 'profiler');
+    }
+    // duplicate columns: one is a copy of the other (e.g. name = externalId).
+    // Verbatim copies claim plainly; mostly-copies claim with the overlap — the
+    // rows where the copy DIVERGES are the interesting ones.
+    for (let i = 0; i < cols.length; i += 1) {
+      for (let j = i + 1; j < cols.length; j += 1) {
+        const a = cols[i];
+        const b = cols[j];
+        const same = rows.filter((r) => String(r[a] == null ? '' : r[a]) === String(r[b] == null ? '' : r[b])).length;
+        const frac = same / rows.length;
+        if (frac >= 0.6 && rows.some((r) => r[a] != null && r[a] !== '')) {
+          const facts = { role: 'redundant', refField: a };
+          if (frac < 0.98) facts.overlap = Math.round(frac * 100);
+          claim(name, b, facts, 'profiler');
+        }
+      }
+    }
+    profiles.set(name, prof);
+    linkScan();
+  }
+
+  // Cross-source (and self-) reference detection: a non-key column whose values
+  // sit inside another column's unique key set is a reference — assets.parentId
+  // → assets.id, timeseries.assetId → assets.id.  ';'-joined values are split
+  // first and claimed as a multi-reference (events.assetIds).
+  function linkScan() {
+    const keyCols = [];
+    for (const [sname, prof] of profiles) {
+      for (const c in prof) {
+        if (prof[c].unique && !prof[c].capped) keyCols.push({ source: sname, col: c, set: prof[c].distinct });
+      }
+    }
+    for (const [sname, prof] of profiles) {
+      for (const c in prof) {
+        const pc = prof[c];
+        if (pc.capped) continue;
+        // ';'-joined values are split into their parts first (the distinct set
+        // holds strings, whatever the column's nominal type)
+        let parts = pc.distinct;
+        let multi = false;
+        if ([...pc.distinct].some((v) => v.includes(';'))) {
+          multi = true;
+          parts = new Set();
+          for (const v of pc.distinct) for (const p of v.split(';')) if (p) parts.add(p);
+        }
+        // a unique plain column is a key, not a reference — but a unique
+        // ';'-joined column can still multi-reference another table
+        if (pc.unique && !multi) continue;
+        if (parts.size < 3) continue;
+        for (const k of keyCols) {
+          if (k.source === sname && k.col === c) continue;
+          const key = `${sname}.${c}->${k.source}.${k.col}`;
+          if (linked.has(key)) continue;
+          let hit = 0;
+          for (const v of parts) if (k.set.has(v)) hit += 1;
+          if (hit / parts.size >= 0.95) {
+            linked.add(key);
+            claim(sname, c, { role: multi ? 'refs' : 'ref', ref: k.source, refField: k.col }, 'profiler');
+          }
+        }
+      }
+    }
+  }
+
+  // The profile of one source as compact human lines — what the agent perceives
+  // instead of guessing from sample rows, and what the field guide renders.
+  function fieldLines(name) {
+    const cols = Object.keys((sources.get(name) || {}).schema || {});
+    const out = [];
+    for (const c of cols) {
+      const m = fieldMeta.get(`${name}|${c}`);
+      if (!m) continue;
+      const bits = [];
+      if (m.title) bits.push(`“${m.title}”`);
+      if (m.type && m.type !== 'empty') bits.push(m.type);
+      if (m.role === 'key') bits.push('unique key');
+      else if (m.role === 'ref') bits.push(`references ${m.ref}.${m.refField}`);
+      else if (m.role === 'refs') bits.push(`multi-references ${m.ref}.${m.refField} (';'-joined)`);
+      else if (m.role === 'enum') bits.push(`one of: ${m.values}`);
+      else if (m.role === 'constant') bits.push(`always “${m.values}”`);
+      else if (m.role === 'redundant') bits.push(m.overlap ? `duplicates ${m.refField} on ${m.overlap}% of rows` : `duplicates ${m.refField}`);
+      if (m.pattern) bits.push(`pattern ${m.pattern} (${m.coverage}% of rows)`);
+      if (m.empty) bits.push(m.empty >= 100 ? 'always empty' : `${m.empty}% empty`);
+      if (m.description) bits.push(m.description);
+      out.push(`${c}: ${bits.join(' · ')}`);
+    }
+    return out;
+  }
+  const fieldTitle = (src, c) => {
+    const m = fieldMeta.get(`${src}|${c}`);
+    return (m && m.title) || c;
+  };
+
+  // The agent's `annotate` tool — the SEMANTIC pass: what a field means, in words
+  // the profiler cannot know.  An agent claim on the same stream, so it overrides
+  // the statistical one on fold and replays from the journal like any tool call.
+  function doAnnotate(a) {
+    const src = resolveSourceName(a.source);
+    const field = String(a.field || '');
+    const cols = Object.keys((sources.get(src) || {}).schema || {});
+    if (!cols.length || !field) {
+      logStep('failed', `${String(a.source || '')}.${field}`, { subject: `schema:${src}.${field}`, tone: 'error', detail: 'no such source to annotate; mount or build it first' });
+      return;
+    }
+    if (!cols.includes(field)) {
+      logStep('failed', `${srcTitle(src)} · ${field}`, { subject: `schema:${src}.${field}`, tone: 'error', detail: `no field “${field}” — fields are: ${cols.join(', ')}` });
+      return;
+    }
+    const facts = { title: String(a.title || ''), description: String(a.description || '') };
+    if (a.ref) {
+      facts.role = 'ref';
+      facts.ref = resolveSourceName(a.ref);
+    }
+    claim(src, field, facts, 'agent');
+    logStep('described', `${srcTitle(src)} · ${field}`, { subject: `schema:${src}.${field}`, ev: { type: 'open_source', name: src } });
+  }
+
   // Called from the Rust boundary once a file has been read (mount = federate, §9.9).
   function mountSource(name, meta, rows) {
     // A documents corpus is an app-lens concern (not core): a mounted source whose rows
@@ -222,6 +450,7 @@ const T = (() => {
     };
     sources.set(name, info);
     sourcesPanel.set(name, info);
+    profileSource(name); // first-pass schema inference, the moment the data lands
     info.cardSeq = workCard(`Mounted ${info.title}`, info.description, mountMeta(info), { type: 'open_source', name });
   }
 
@@ -386,10 +615,32 @@ const T = (() => {
     }
     V.add('div', 'exp:note', null, i++); V.set('exp:note', 'class', 'explorer-note');
     V.text('exp:note', `${residenceLabel(s)} · ${cols.length} columns · showing ${rows.length} of ${s.rowcount} rows${chartable ? ' · click a sensor to chart it' : ''}`);
+    // the field guide: what the twin has understood about each column — inferred
+    // structure (keys, references, enums, patterns) and the agent's annotations.
+    const lines = fieldLines(name);
+    const guide = cols
+      .filter((c) => {
+        const m = fieldMeta.get(`${name}|${c}`);
+        return m && (m.title || m.description || m.role || m.pattern);
+      })
+      .map((c) => lines.find((l) => l.startsWith(`${c}:`)) || c);
+    if (guide.length) {
+      V.add('div', 'exp:fg', null, i++); V.set('exp:fg', 'class', 'field-guide');
+      guide.forEach((line, gi) => {
+        const k = `exp:fg:${gi}`;
+        V.add('div', k, 'exp:fg', gi); V.set(k, 'class', 'field-line');
+        V.text(k, line);
+      });
+    }
     V.add('table', 'exp:tbl', null, i);
     V.add('thead', 'exp:thead', 'exp:tbl', 0);
     V.add('tr', 'exp:htr', 'exp:thead', 0);
-    cols.forEach((c, ci) => { V.add('th', `exp:th:${ci}`, 'exp:htr', ci); V.text(`exp:th:${ci}`, c); });
+    cols.forEach((c, ci) => {
+      V.add('th', `exp:th:${ci}`, 'exp:htr', ci);
+      V.text(`exp:th:${ci}`, fieldTitle(name, c));
+      const m = fieldMeta.get(`${name}|${c}`);
+      if (m && (m.title || m.description)) V.set(`exp:th:${ci}`, 'title', m.title ? `${c}${m.description ? ' — ' + m.description : ''}` : m.description);
+    });
     V.add('tbody', 'exp:tb', 'exp:tbl', 1);
     rows.forEach((row, ri) => {
       const rk = `exp:r:${ri}`;
@@ -1088,6 +1339,7 @@ const T = (() => {
       rowcount: out.length, materialized: out.length, schema, sample: out.slice(0, 3),
     });
     G.submit(lensesSrc, ZSet.fromRows([rec({ name, title, description, source: srcName, code, rowcount: out.length, ver })]), prov('agent'));
+    profileSource(lname); // derived rows get the same schema inference as mounts
     logStep('built', title, {
       subject: 'lens:' + name,
       detail: `${fmtInt(out.length)} rows from ${srcTitle(srcName)}${ver > 1 ? ` · v${ver}` : ''}`,
@@ -1212,13 +1464,13 @@ const T = (() => {
       listen: (sub, type) => TWIN_MUT.push({ op: 'listen', key: `${pfx}:${sub}`, type }),
     };
   }
-  function renderTableInto(root, pfx, rows, cols, note) {
+  function renderTableInto(root, pfx, rows, cols, note, srcName) {
     const b = vbuild(root, pfx);
     b.add('div', 'note', null, 0); b.set('note', 'class', 'explorer-note'); b.text('note', note || `${rows.length} rows · ${cols.length} columns`);
     b.add('div', 'scroll', null, 1); b.set('scroll', 'class', 'view-scroll');
     b.add('table', 'tbl', 'scroll', 0);
     b.add('thead', 'hd', 'tbl', 0); b.add('tr', 'htr', 'hd', 0);
-    cols.forEach((c, i) => { b.add('th', `h${i}`, 'htr', i); b.text(`h${i}`, c); });
+    cols.forEach((c, i) => { b.add('th', `h${i}`, 'htr', i); b.text(`h${i}`, srcName ? fieldTitle(srcName, c) : c); });
     b.add('tbody', 'tb', 'tbl', 1);
     rows.forEach((row, ri) => {
       b.add('tr', `r${ri}`, 'tb', ri);
@@ -1331,7 +1583,7 @@ const T = (() => {
     const title = a.title || srcTitle(srcName);
     const sq = append('view', { text: title, view: 'table' });
     renderTableInto(`item:${sq}:body`, `v${sq}`, rows, cols.length ? cols : Object.keys(rows[0] || {}),
-      `showing ${rows.length} of ${s.rowcount} rows${a.filter ? ` matching “${a.filter}”` : ''}`);
+      `showing ${rows.length} of ${s.rowcount} rows${a.filter ? ` matching “${a.filter}”` : ''}`, srcName);
     cardOpen(sq, srcTitle(srcName), { type: 'open_source', name: srcName });
   }
 
@@ -1369,6 +1621,7 @@ const T = (() => {
       case 'finding': addFinding(a); break;
       case 'make_lens': makeLens(a); break;
       case 'describe': doDescribe(a.source || a.name || a.lens, a.title, a.description, a.origin); break;
+      case 'annotate': doAnnotate(a); break;
       case 'idle': break; // "nothing worth doing" — pacing lives in the Rust harness
       // read_source is effectful: handled at the Rust boundary, which calls mountSource.
       default: if (a.text) append('agent', { text: String(a.text) }); break;
@@ -1517,10 +1770,18 @@ const T = (() => {
     const CONVO = new Set(['user', 'agent', 'question', 'thought', 'system']);
     const recent = feed.items.filter((it) => CONVO.has(it.kind)).slice(-40)
       .map((it) => ({ kind: it.kind, text: it.text, options: it.options }));
-    const srcs = [...sources].map(([name, s]) => ({
-      name, title: s.title, description: s.description,
-      residence: s.residence, rowcount: s.rowcount, schema: s.schema, sample: s.sample,
-    }));
+    // Sources carry their inferred schema as `fields` — types, keys, references,
+    // enums, patterns, plus the agent's own annotations.  Far denser than sample
+    // rows, so the samples shrink to two: the profile is the real context.
+    const srcs = [...sources].map(([name, s]) => {
+      const fl = fieldLines(name);
+      return {
+        name, title: s.title, description: s.description,
+        residence: s.residence, rowcount: s.rowcount,
+        fields: fl.length ? fl : Object.keys(s.schema || {}),
+        sample: (s.sample || []).slice(0, 2),
+      };
+    });
     const sks = [...skills].map(([name, s]) => ({ name, description: s.description }));
     const ag = [...agenda].map(([id, a]) => ({ id, text: a.text, description: a.desc, status: a.status }));
     return JSON.stringify({

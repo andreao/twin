@@ -79,9 +79,10 @@ You act by emitting exactly ONE JSON object per turn — no prose outside it, no
 - {"tool":"finding","args":{"severity":"info"|"warn"|"critical","text":"...","source":"<name>"}}  record a data issue or insight you discovered — it lands on the Findings board and in your work log, NOT in the chat. Write it so a human can act: WHAT is wrong, WHERE, and why it matters. If it is warn or critical and the user should know NOW, follow with a short `say` that TELLS them what you found and why it matters — filing alone tells them nothing. Never re-file one already in "findings".
 - {"tool":"make_lens","args":{"name":"Gearboxes running hot","description":"one sentence: what this shows and why it matters","source":"<name>","code":"return rows.filter(r => ...)"}}  AUTHOR a new lens: pure JavaScript, gets `rows` (array of plain objects) from the source, returns an array of rows. To CROSS-REFERENCE another source, call `table("<name>")` — it returns that source's rows (e.g. `const ev = table("events"); return rows.filter(r => ev.some(e => String(e.assetIds).includes(String(r.id))))`). Other sources exist ONLY through table(); bare names like `events` or `timeseries` are NOT defined. The lens becomes a live derived source with full lineage, shown as a tile on the twin board. NAMING MATTERS: "name" must be a short human title a plant engineer would say (e.g. "Unique asset types", "Sensors without equipment") — NEVER include the word "lens", and always give a real one-sentence description. Lenses COMPOSE: "source" can be another lens (source:"lens:<name>"), and the board shows the full derivation chain. A new lens lands on the board QUIETLY — mention it in the chat (say/show) only when it is genuinely interesting to the user, not for every derivation you try.
 - {"tool":"describe","args":{"source":"<name or lens:name>","title":"...","description":"..."}}  give any source or lens a better human title and description. Every tile on the board deserves both.
+- {"tool":"annotate","args":{"source":"<name>","field":"<column>","title":"...","description":"...","ref":"<source it references, optional>"}}  document ONE FIELD: a short human title and a one-sentence description of what it MEANS. The twin already profiles every source statistically the moment it mounts — you see the result as "fields" on each source (types, unique keys, cross-source references, enums, string patterns). Your job is the semantics the statistics cannot know: what the field means in the plant, what a mined pattern encodes (e.g. a tag convention like VAL_##-TT-#####-## — TT is a temperature transmitter), which reference the stats missed. Annotating a source's fields EARLY pays off everywhere: your lenses join on the right keys, tables render human column names, and your own perception gets sharper.
 - {"tool":"idle","args":{}}  background only: nothing worth doing right now.
 
-You perceive the twin as JSON each turn: "profile", "sources" (schema + sample rows), "skills", "agenda" (your to-do list), "findings" (issues you already recorded), "lenses" (lenses you already authored), "activity" (your recent work log — inspect results land here), "userActions" (the user's RAW recent actions: every click, search, view — they are recorded verbatim with lineage; derive the user's goals from what they actually DO and record_profile what you infer), and "feed" (the conversation). A turn ends when you say or ask; every other tool continues the turn — so you can inspect, then make a lens of what you found, then show it, all in one turn.
+You perceive the twin as JSON each turn: "profile", "sources" (each with "fields" — the inferred schema: types, keys, references, enums, patterns, plus your annotations — and two sample rows), "skills", "agenda" (your to-do list), "findings" (issues you already recorded), "lenses" (lenses you already authored), "activity" (your recent work log — inspect results land here), "userActions" (the user's RAW recent actions: every click, search, view — they are recorded verbatim with lineage; derive the user's goals from what they actually DO and record_profile what you infer), and "feed" (the conversation). A turn ends when you say or ask; every other tool continues the turn — so you can inspect, then make a lens of what you found, then show it, all in one turn.
 
 Rules:
 - Output ONE valid JSON object only. Nothing before or after it.
@@ -98,7 +99,7 @@ Rules:
 - You both act AND ask — take initiative on safe, reversible work, and ask the user pointed questions to steer it. Don't ask permission for reversible steps; do ask for the judgment and domain knowledge only they have. End each foreground turn by say-ing what you did/showing it, or by ask-ing."#;
 
 /// Appended to background turns: the agent's own work time, and how to spend it.
-const BACKGROUND_BRIEF: &str = "BACKGROUND TURN — the user has NOT spoken; this is your own work time on your own compute. Do real proactive work now: keep your agenda current (plan / work / done); inspect sources you haven't profiled (check activity for what you already did); record data issues or insights as findings; author a lens with make_lens when you see a useful derivation; infer the user's goals from userActions and record_profile them. STAY OUT OF THE CHAT: background work ends QUIETLY by default — the board and your work log already show it. Use ONE short `say` only when something genuinely demands the user's attention right now (a critical issue, a surprising pattern that changes the picture). If ONE pointed question would unblock better work, use `ask` — it waits for the user as a card. If there is truly nothing left worth doing, emit {\"tool\":\"idle\",\"args\":{}}.";
+const BACKGROUND_BRIEF: &str = "BACKGROUND TURN — the user has NOT spoken; this is your own work time on your own compute. Do real proactive work now: keep your agenda current (plan / work / done); inspect sources you haven't profiled (check activity for what you already did); annotate fields whose meaning you can work out (check each source's \"fields\" for ones still without a title — do these early, everything downstream improves); record data issues or insights as findings; author a lens with make_lens when you see a useful derivation; infer the user's goals from userActions and record_profile them. STAY OUT OF THE CHAT: background work ends QUIETLY by default — the board and your work log already show it. Use ONE short `say` only when something genuinely demands the user's attention right now (a critical issue, a surprising pattern that changes the picture). If ONE pointed question would unblock better work, use `ask` — it waits for the user as a card. If there is truly nothing left worth doing, emit {\"tool\":\"idle\",\"args\":{}}.";
 
 /// Why the agent is being woken.
 pub enum Wake {
@@ -222,15 +223,20 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
         //     (observed failure modes: gemma re-emits near-identical thoughts, and
         //      re-emits the same show/inspect/make_lens until the step cap).
         let mut nudge = if background {
-            BACKGROUND_BRIEF.to_string()
+            let mut b = BACKGROUND_BRIEF.to_string();
+            if let Some(a) = annotate_nudge(&ctx) {
+                b.push_str("\n\n");
+                b.push_str(&a);
+            }
+            b
         } else {
             path_nudge(&ctx).unwrap_or_default()
         };
         if thoughts >= 1 {
             let acts = if background {
-                "plan / work / done / inspect / finding / make_lens / show / record_profile / ask / idle"
+                "plan / work / done / inspect / annotate / finding / make_lens / show / record_profile / ask / idle"
             } else {
-                "say / ask / show / inspect / plan / finding / make_lens / record_profile / read_source"
+                "say / ask / show / inspect / annotate / plan / finding / make_lens / record_profile / read_source"
             };
             nudge.push_str(&format!(
                 "\n\nYou have ALREADY thought this turn. Your next output MUST be an ACTION tool ({acts}) — NOT think."
@@ -243,7 +249,7 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
         }
         if let Some(item) = &idle_item {
             nudge.push_str(&format!(
-                "\n\nYou said idle, but your agenda still has open items — next up: “{item}”. Idle is NOT allowed while the agenda has work. Do a real step on it NOW (inspect / make_lens / finding / show / work), or mark it done if it truly is."
+                "\n\nYou said idle, but your agenda still has open items — next up: “{item}”. Idle is NOT allowed while the agenda has work. Do a real step on it NOW (inspect / annotate / make_lens / finding / show / work), or mark it done if it truly is."
             ));
             idle_item = None;
         }
@@ -338,10 +344,49 @@ fn dedup_key(tool_json: &str) -> String {
         "inspect" => format!("inspect:{}", s("source")),
         "make_lens" => format!("make_lens:{}", s("name").to_lowercase()),
         "describe" => format!("describe:{}", s("source")),
+        "annotate" => format!("annotate:{}:{}", s("source"), s("field")),
         "read_source" => format!("read_source:{}", s("path")),
         "record_profile" => format!("record_profile:{}", s("field")),
         _ => tool_json.to_string(),
     }
+}
+
+/// Mounted sources whose fields still lack a human title (no '“…”' in the field
+/// line) — the rail that turns "annotate early" from a suggestion into named work.
+/// One source per nudge; each annotate re-perceives, so a background turn walks
+/// through the gaps field by field.  Lenses are skipped: their columns come from
+/// the mounts, and documenting the mounts is what pays everywhere.
+fn annotate_nudge(ctx: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(ctx).ok()?;
+    for s in v["sources"].as_array()? {
+        let name = s["name"].as_str().unwrap_or_default();
+        if name.is_empty() || name.starts_with("lens:") || name == "documents" {
+            continue;
+        }
+        let fields = match s["fields"].as_array() {
+            Some(f) => f,
+            None => continue,
+        };
+        let missing: Vec<&str> = fields
+            .iter()
+            .filter_map(|f| f.as_str())
+            .filter(|l| !l.contains('“'))
+            .filter_map(|l| l.split(':').next())
+            .take(8)
+            .collect();
+        if !missing.is_empty() {
+            let title = s["title"].as_str().unwrap_or(name);
+            return Some(format!(
+                "SCHEMA GAP: in source \"{name}\" ({title}), the fields {} still have no human title. \
+                 Use annotate on ONE of them NOW — a short title a plant engineer would say, plus one \
+                 sentence of what it MEANS (its profile in \"sources\" already tells you the type, \
+                 references, enums and patterns; add the semantics). If its meaning is genuinely \
+                 unknowable from the data, ask the user instead — one pointed question.",
+                missing.join(", ")
+            ));
+        }
+    }
+    None
 }
 
 /// The first open agenda item in the perception JSON, if any — the ground truth the
@@ -558,5 +603,26 @@ mod tests {
     fn dechunk_reassembles() {
         let chunked = "5\r\nhello\r\n1\r\n!\r\n0\r\n\r\n";
         assert_eq!(dechunk(chunked), "hello!");
+    }
+
+    #[test]
+    fn annotate_nudge_names_untitled_fields_of_mounts_only() {
+        let ctx = r#"{"sources":[
+            {"name":"lens:hot","title":"Hot","fields":["temp: number"]},
+            {"name":"timeseries","title":"Sensor catalogue","fields":[
+                "id: number · unique key",
+                "assetId: number · references assets.id",
+                "unit: “Engineering unit” · string · the unit of measure"]}]}"#;
+        let n = annotate_nudge(ctx).unwrap();
+        assert!(n.contains("Sensor catalogue"), "nudge names the source: {n}");
+        assert!(n.contains("id, assetId"), "untitled fields listed: {n}");
+        assert!(!n.contains("unit"), "annotated field must not be re-nudged: {n}");
+        assert!(!n.contains("lens:hot"), "lenses are not nudged: {n}");
+    }
+
+    #[test]
+    fn annotate_nudge_is_silent_when_everything_is_titled() {
+        let ctx = r#"{"sources":[{"name":"ts","title":"T","fields":["id: “Series id” · number"]}]}"#;
+        assert!(annotate_nudge(ctx).is_none());
     }
 }
