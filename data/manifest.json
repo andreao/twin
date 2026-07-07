@@ -1,5 +1,9 @@
 {
   "_comment": "Domain-neutral mount manifest (§7 residence). The CORE loops over these entries and mounts each generically — it never interprets the names. All domain vocabulary (what an 'asset' is, how to describe it) lives HERE, in data, or in lens-space.",
+  "project": {
+    "title": "Valhall platform",
+    "description": "Aker BP's Valhall oil platform in the North Sea — equipment, sensors, maintenance history and drawings from Cognite's open industrial dataset."
+  },
   "mounts": [
     {
       "name": "assets",
