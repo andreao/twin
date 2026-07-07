@@ -15,6 +15,9 @@ pub struct Skill {
     pub description: String,
     pub dir: String,
     pub files: Vec<String>,
+    /// The skill's runnable entry point (frontmatter `tool:`), relative to `dir` —
+    /// what the agent's run_skill executes.
+    pub tool: Option<String>,
 }
 
 /// Discover every `<root>/<name>/SKILL.md` and read its manifest.
@@ -34,7 +37,7 @@ pub fn discover(root: &str) -> Vec<Skill> {
             continue;
         }
         let text = fs::read_to_string(&manifest).unwrap_or_default();
-        let (name, title, description) = parse_manifest(&text, &dir);
+        let (name, title, description, tool) = parse_manifest(&text, &dir);
         let mut files: Vec<String> = fs::read_dir(&dir)
             .map(|rd| {
                 rd.flatten()
@@ -49,15 +52,16 @@ pub fn discover(root: &str) -> Vec<Skill> {
             description,
             dir: dir.to_string_lossy().into_owned(),
             files,
+            tool,
         });
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
 }
 
-/// name / title / description from YAML frontmatter if present, else derive from the
-/// dir name and the first meaningful line.
-fn parse_manifest(text: &str, dir: &Path) -> (String, String, String) {
+/// name / title / description / tool from YAML frontmatter if present, else derive
+/// from the dir name and the first meaningful line.
+fn parse_manifest(text: &str, dir: &Path) -> (String, String, String, Option<String>) {
     let mut name = dir
         .file_name()
         .and_then(|s| s.to_str())
@@ -65,6 +69,7 @@ fn parse_manifest(text: &str, dir: &Path) -> (String, String, String) {
         .to_string();
     let mut title = String::new();
     let mut description = String::new();
+    let mut tool = None;
 
     if let Some(rest) = text.strip_prefix("---") {
         if let Some(end) = rest.find("\n---") {
@@ -75,6 +80,11 @@ fn parse_manifest(text: &str, dir: &Path) -> (String, String, String) {
                     title = v.trim().to_string();
                 } else if let Some(v) = line.strip_prefix("description:") {
                     description = v.trim().to_string();
+                } else if let Some(v) = line.strip_prefix("tool:") {
+                    let t = v.trim().to_string();
+                    if !t.is_empty() {
+                        tool = Some(t);
+                    }
                 }
             }
         }
@@ -103,7 +113,7 @@ fn parse_manifest(text: &str, dir: &Path) -> (String, String, String) {
             .take(200)
             .collect();
     }
-    (name, title, description)
+    (name, title, description, tool)
 }
 
 #[cfg(test)]
@@ -119,5 +129,6 @@ mod tests {
         let oid = oid.unwrap();
         assert!(!oid.description.is_empty());
         assert!(oid.files.iter().any(|f| f == "pull_oid.sh"), "should list its tooling");
+        assert_eq!(oid.tool.as_deref(), Some("pull_oid.sh"), "frontmatter tool: is the runnable entry");
     }
 }

@@ -321,7 +321,7 @@ fn graph_loop(
                     note_pause(&paused, p);
                     replayed += 1;
                 }
-                (Some("tool"), Some(p)) => { dispatch_tool(&mut g, &mut embeds, p); replayed += 1; }
+                (Some("tool"), Some(p)) => { dispatch_tool(&mut g, &mut embeds, p, true); replayed += 1; }
                 _ => {}
             }
         }
@@ -384,7 +384,7 @@ fn graph_loop(
                 }
             }
             Cmd::AgentTool(json) => {
-                dispatch_tool(&mut g, &mut embeds, &json);
+                dispatch_tool(&mut g, &mut embeds, &json, false);
                 journal_append(&mut journal, "tool", &json);
                 broadcast_new(&mut g, &mut cursor, &mut clients);
             }
@@ -404,9 +404,11 @@ fn graph_loop(
 
 /// Apply an agent tool-call. Pure workspace tools (think/say/ask/record_profile) go
 /// straight to the V8 graph; effectful ones (read_source, read_document, search,
-/// §9.9) are handled in Rust because they touch the outside world (files, the OCR
-/// and embedding models), then land their result back as graph edits.
-fn dispatch_tool(g: &mut JsGraph, embeds: &mut crate::embed::EmbedStore, json: &str) {
+/// run_skill, §9.9) are handled in Rust because they touch the outside world
+/// (files, models, skill scripts), then land their result back as graph edits.
+/// `replaying` marks a journal-boot replay: effects whose product persists on disk
+/// (a skill's pull) are NOT re-executed — replay stops at the boundary (§8).
+pub fn dispatch_tool(g: &mut JsGraph, embeds: &mut crate::embed::EmbedStore, json: &str, replaying: bool) {
     let parsed: Option<serde_json::Value> = serde_json::from_str(json).ok();
     let tool = parsed.as_ref().and_then(|v| v["tool"].as_str()).unwrap_or("");
     let show_chart = tool == "show"
@@ -483,6 +485,58 @@ fn dispatch_tool(g: &mut JsGraph, embeds: &mut crate::embed::EmbedStore, json: &
                     g.twin_log_step("read", &name, &detail, &src, "");
                 }
                 Err(e) => g.twin_log_step("failed", &name, &e, &src, "error"),
+            }
+        }
+        "run_skill" => {
+            let args = &parsed.as_ref().unwrap()["args"];
+            let skill = args["skill"].as_str().or_else(|| args["name"].as_str()).unwrap_or("").trim().to_string();
+            let cmd = args["command"].as_str().or_else(|| args["args"].as_str()).unwrap_or("").trim().to_string();
+            if skill.is_empty() {
+                return;
+            }
+            let subject = format!("skill:{skill}");
+            let label = if cmd.is_empty() { skill.clone() } else { format!("{skill} {cmd}") };
+            let Some(s) = crate::skills::discover("skills").into_iter().find(|s| s.name == skill) else {
+                g.twin_log_step("failed", &label, "no skill by that name", &subject, "error");
+                return;
+            };
+            let Some(tool) = s.tool else {
+                g.twin_log_step("failed", &label, "this skill has no runnable tool", &subject, "error");
+                return;
+            };
+            if replaying {
+                // the run already happened in this twin's history; whatever it
+                // fetched persists on disk — replay never re-executes effects
+                g.twin_log_step("ran", &label, "from memory — not re-executed on replay", &subject, "");
+                return;
+            }
+            if !cmd.chars().all(|c| c.is_ascii_alphanumeric() || " _.:/=-".contains(c)) {
+                g.twin_log_step("failed", &label, "the command contains characters a skill run does not accept", &subject, "error");
+                return;
+            }
+            eprintln!("[run_skill] {}/{tool} {cmd}", s.dir);
+            match std::process::Command::new("bash")
+                .arg(format!("{}/{tool}", s.dir))
+                .args(cmd.split_whitespace())
+                .output()
+            {
+                Ok(o) => {
+                    let ok = o.status.success();
+                    let mut text = String::from_utf8_lossy(&o.stdout).into_owned();
+                    if !ok {
+                        text.push(' ');
+                        text.push_str(&String::from_utf8_lossy(&o.stderr));
+                    }
+                    let tail = snippet(text.trim(), 240);
+                    g.twin_log_step(
+                        if ok { "ran" } else { "failed" },
+                        &label,
+                        &tail,
+                        &subject,
+                        if ok { "" } else { "error" },
+                    );
+                }
+                Err(e) => g.twin_log_step("failed", &label, &e.to_string(), &subject, "error"),
             }
         }
         "search" => {

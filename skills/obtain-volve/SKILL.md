@@ -1,7 +1,7 @@
 ---
 name: obtain-volve
 title: Obtain Volve drilling data
-description: Pull Equinor's open Volve field drilling corpus into the twin — WITSML daily drill reports and trajectories, EDM engineering exports, LAS well logs, formation picks and final well reports. Bundled samples work offline; the full dataset needs a one-time registration.
+description: Pull Equinor's open Volve field drilling corpus into the twin — WITSML drill reports, trajectories, EDM exports, LAS logs, picks, reports. Commands — github (REAL WITSML for three wells, ~200 MB, no registration), sample (verify the bundled offline samples), pull (a full-corpus mirror via VOLVE_BASE), status (what's on disk).
 tool: pull_volve.sh
 ---
 

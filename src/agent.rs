@@ -67,6 +67,7 @@ You act by emitting exactly ONE JSON object per turn — no prose outside it, no
 - {"tool":"show","args":{"view":"table","source":"<name>","columns":["..."],"limit":10,"filter":"...","title":"..."}}  render a REAL component inline in the conversation. view="table" (a data table; columns/limit/filter optional), view="tree" (an equipment hierarchy from a source like assets), view="chart" with "series":"<id from the timeseries source>" (a live line chart of that sensor's datapoints, fetched on demand), or view="document" with "name":"<file>" (a P&ID/drawing/PDF viewer). This is how you present anything data-shaped. Works on lens:* sources too.
 - {"tool":"record_profile","args":{"field":"...","value":"..."}}  save a durable fact about the user (role, goal, industry, data) the moment you learn it — including goals you INFER from their raw actions.
 - {"tool":"read_source","args":{"path":"/absolute/path/to/file.csv"}}  mount a local data file OR a whole directory — federates it (no copy); it then appears in your perception under "sources". Formats: CSV/TSV, JSON, JSONL, WITSML XML (drill reports, logs, trajectories, BHA runs), EDM engineering exports, LAS well logs, xlsx workbooks, and fixed-width listings (well picks) — each becomes flat rows automatically. A directory (e.g. one well's WITSML tree) mounts as ONE source with every row tagged kind (object type) and file (lineage) — make_lens then extracts by kind.
+- {"tool":"run_skill","args":{"skill":"obtain-volve","command":"github"}}  run one of your skills (under "skills") — the SYSTEM fetches data, not the user. A slow, governed host effect: its output lands in your activity log, and whatever it downloads appears under "unmounted" for you to mount next. Each skill's description names its command words. When the user points you at a domain and the data isn't on disk, this is YOUR move — don't ask them to run scripts.
 - {"tool":"read_document","args":{"name":"<file>.pdf"}}  read a mounted document's TEXT: the PDF text layer when it has one, otherwise the local vision model reads the page images (slow — minutes; do it in background turns). The text lands as source doc:<name> and is embedded for search.
 - {"tool":"search","args":{"query":"..."}}  semantic search across everything read from documents; the best passages land in your activity log for the next turn. Use it to answer questions from reports ("what caused the sidetrack?") with real citations.
 - {"tool":"inspect","args":{"source":"<name>"}}  profile a mounted source: ranges, empties, duplicates. The result lands in your activity log for the next turn.
@@ -97,7 +98,7 @@ Rules:
 - You both act AND ask — take initiative on safe, reversible work, and ask the user pointed questions to steer it. Don't ask permission for reversible steps; do ask for the judgment and domain knowledge only they have. End each foreground turn by say-ing what you did/showing it, or by ask-ing."#;
 
 /// Appended to background turns: the agent's own work time, and how to spend it.
-const BACKGROUND_BRIEF: &str = "BACKGROUND TURN — the user has NOT spoken; this is your own work time on your own compute. Do real proactive work now: if \"unmounted\" lists data relevant to this twin, mount it (read_source, one call per path — a fresh pull should never sit on disk unnoticed); keep your agenda current (plan / work / done); inspect sources you haven't profiled (check activity for what you already did); annotate fields whose meaning you can work out (check each source's \"fields\" for ones still without a title — do these early, everything downstream improves; the twin files a finding for every undocumented source, and it resolves itself as you annotate); record data issues or insights as findings; author a lens with make_lens when you see a useful derivation; infer the user's goals from userActions and record_profile them. STAY OUT OF THE CHAT: background work ends QUIETLY by default — the board and your work log already show it. Use ONE short `say` only when something genuinely demands the user's attention right now (a critical issue, a surprising pattern that changes the picture). If ONE pointed question would unblock better work, use `ask` — it waits for the user as a card. If there is truly nothing left worth doing, emit {\"tool\":\"idle\",\"args\":{}}.";
+const BACKGROUND_BRIEF: &str = "BACKGROUND TURN — the user has NOT spoken; this is your own work time on your own compute. Do real proactive work now: if \"unmounted\" lists data relevant to this twin, mount it (read_source, one call per path — a fresh pull should never sit on disk unnoticed); if the twin's purpose needs data that is NOT on disk yet and a skill can fetch it, run_skill it yourself; keep your agenda current (plan / work / done); inspect sources you haven't profiled (check activity for what you already did); annotate fields whose meaning you can work out (check each source's \"fields\" for ones still without a title — do these early, everything downstream improves; the twin files a finding for every undocumented source, and it resolves itself as you annotate); record data issues or insights as findings; author a lens with make_lens when you see a useful derivation; infer the user's goals from userActions and record_profile them. STAY OUT OF THE CHAT: background work ends QUIETLY by default — the board and your work log already show it. Use ONE short `say` only when something genuinely demands the user's attention right now (a critical issue, a surprising pattern that changes the picture). If ONE pointed question would unblock better work, use `ask` — it waits for the user as a card. If there is truly nothing left worth doing, emit {\"tool\":\"idle\",\"args\":{}}.";
 
 /// Why the agent is being woken.
 pub enum Wake {
@@ -353,6 +354,13 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
             "read_source" => "mounting the source".into(),
             "make_lens" => "building a lens".into(),
             "inspect" => "profiling a source".into(),
+            "run_skill" => {
+                let s = serde_json::from_str::<serde_json::Value>(&tool)
+                    .ok()
+                    .and_then(|v| v["args"]["skill"].as_str().map(String::from))
+                    .unwrap_or_default();
+                format!("running the {s} skill — a fetch can take minutes")
+            }
             other => format!("applying {other}"),
         });
         emit(tx, &tool);
@@ -408,6 +416,7 @@ fn dedup_key(tool_json: &str) -> String {
         "annotate" => format!("annotate:{}:{}", s("source"), s("field")),
         "read_source" => format!("read_source:{}", s("path")),
         "read_document" => format!("read_document:{}", if s("name").is_empty() { s("path") } else { s("name") }),
+        "run_skill" => format!("run_skill:{}:{}", s("skill"), s("command")),
         "search" => format!("search:{}", s("query").to_lowercase()),
         "record_profile" => format!("record_profile:{}", s("field")),
         _ => tool_json.to_string(),

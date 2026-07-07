@@ -1,7 +1,7 @@
 ---
 name: obtain-oid
 title: Obtain OID
-description: Pull Cognite Open Industrial Data (Aker BP Valhall) into the twin — real O&G assets, sensor time-series, P&ID documents, events, and 3D. Needs a one-time human device-code login.
+description: Pull Cognite Open Industrial Data (Aker BP Valhall) into the twin — real O&G assets, sensor time-series, P&ID documents, events, and 3D. Commands — login (one-time human device-code sign-in; the code to give the user appears in the output), refresh (new access token), pull (everything), or one stage of assets|timeseries|files|events|datapoints|3d.
 tool: pull_oid.sh
 ---
 
