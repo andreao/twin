@@ -1406,7 +1406,28 @@ const T = (() => {
       const rank = (st) => (st === 'active' ? 0 : st === 'open' ? 1 : 2);
       return rank(x[1].status) - rank(y[1].status);
     });
-    if (!items.length) { V.add('div', 'ag:none', 'ag:list', 1); V.set('ag:none', 'class', 'ad-empty'); V.text('ag:none', 'no plan yet: the agent lays out its own work here'); }
+    if (!items.length) {
+      // no agenda yet — but the twin still KNOWS its backlog deterministically:
+      // the schema gaps its background turns are being steered through.  Show
+      // that instead of an empty shrug, so "working…" always has a visible why.
+      const backlog = [];
+      for (const [sname, meta] of sources) {
+        if (meta.kind !== 'table' || sname.startsWith('lens:')) continue;
+        const missing = Object.keys(meta.schema || {})
+          .filter((c) => !((semanticsOf(sname, c) || {}).title)).length;
+        if (missing > 0) backlog.push({ sname, title: srcTitle(sname), missing });
+      }
+      backlog.sort((x, y) => y.missing - x.missing);
+      if (!backlog.length) {
+        V.add('div', 'ag:none', 'ag:list', 1); V.set('ag:none', 'class', 'ad-empty');
+        V.text('ag:none', 'no plan yet: the agent lays out its own work here');
+      }
+      backlog.slice(0, 5).forEach((w, bi) => {
+        const k = `ag:bk${bi}`;
+        V.add('div', k, 'ag:list', bi + 1); V.set(k, 'class', 'act-detail');
+        V.text(k, `${bi ? 'then' : 'next'}: document the fields of ${w.title} — ${w.missing} to go`);
+      });
+    }
     let i = 1;
     let queued = 0; // only ONE thing is next — everything open behind it is "later"
     for (const [id, a] of items) {

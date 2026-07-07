@@ -500,6 +500,20 @@ fn agent_page_shows_agenda_and_activity_tidily() {
 }
 
 #[test]
+fn an_empty_plan_shows_the_deterministic_backlog() {
+    let path = write_temp_csv();
+    let mut g = JsGraph::new_twin();
+    g.twin_read_source("turbines", &path, "mounted");
+    // no agenda items exist — the page shows the schema work the background
+    // turns are being steered through, so "working…" always has a visible why
+    g.twin_event(r#"{"type":"open_agent","panel":0}"#);
+    let d = g.twin_from(0);
+    assert!(d.contains("document the fields of turbines"), "no backlog row: {d}");
+    assert!(d.contains("4 to go"), "no remaining-count on the backlog row: {d}");
+    assert!(!d.contains("no plan yet"), "empty shrug shown despite known work");
+}
+
+#[test]
 fn a_column_splits_vertically_into_an_addressable_bottom_half() {
     let path = write_temp_csv();
     let mut g = JsGraph::new_twin();

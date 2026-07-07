@@ -246,7 +246,7 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
         let gap = annotate_nudge(&ctx);
         let mut nudge = if background {
             let mut b = BACKGROUND_BRIEF.to_string();
-            if let Some((_, a)) = &gap {
+            if let Some((_, _, a)) = &gap {
                 b.push_str("\n\n");
                 b.push_str(a);
             }
@@ -280,8 +280,8 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
                 String::from("thinking about your message")
             } else if let Some(item) = agenda_head(&ctx) {
                 format!("working on: {item}")
-            } else if let Some((title, _)) = &gap {
-                format!("working out what the fields of {title} mean")
+            } else if let Some((title, left, _)) = &gap {
+                format!("working out what the fields of {title} mean — {left} to go")
             } else {
                 String::from("looking over the twin for useful work")
             }
@@ -441,9 +441,10 @@ fn dedup_key(tool_json: &str) -> String {
 /// One source per nudge; each annotate re-perceives, so a background turn walks
 /// through the gaps field by field.  Lenses are skipped: their columns come from
 /// the mounts, and documenting the mounts is what pays everywhere.
-/// Returns (the source's human title — for the live status line, so the user sees
-/// WHAT is being worked out — and the nudge text for the model).
-fn annotate_nudge(ctx: &str) -> Option<(String, String)> {
+/// Returns (the source's human title and how many fields are still undocumented —
+/// for the live status line, so the user sees WHAT is being worked out and how
+/// much is left — and the nudge text for the model).
+fn annotate_nudge(ctx: &str) -> Option<(String, usize, String)> {
     let v: serde_json::Value = serde_json::from_str(ctx).ok()?;
     for s in v["sources"].as_array()? {
         let name = s["name"].as_str().unwrap_or_default();
@@ -454,17 +455,18 @@ fn annotate_nudge(ctx: &str) -> Option<(String, String)> {
             Some(f) => f,
             None => continue,
         };
-        let missing: Vec<&str> = fields
+        let all_missing: Vec<&str> = fields
             .iter()
             .filter_map(|f| f.as_str())
             .filter(|l| !l.contains('“'))
             .filter_map(|l| l.split(':').next())
-            .take(8)
             .collect();
+        let missing: Vec<&str> = all_missing.iter().take(8).copied().collect();
         if !missing.is_empty() {
             let title = s["title"].as_str().unwrap_or(name);
             return Some((
                 title.to_string(),
+                all_missing.len(),
                 format!(
                     "SCHEMA GAP: in source \"{name}\" ({title}), the fields {} still have no human title. \
                      Use annotate on ONE of them NOW — the \"field\" arg must be the KEY exactly as listed, \
@@ -645,8 +647,9 @@ mod tests {
                 "id: number · unique key",
                 "assetId: number · references assets.id",
                 "unit: “Engineering unit” · string · the unit of measure"]}]}"#;
-        let (title, n) = annotate_nudge(ctx).unwrap();
+        let (title, left, n) = annotate_nudge(ctx).unwrap();
         assert_eq!(title, "Sensor catalogue", "subject is the source's human title");
+        assert_eq!(left, 2, "undocumented-field count for the progress line");
         assert!(n.contains("Sensor catalogue"), "nudge names the source: {n}");
         assert!(n.contains("id, assetId"), "untitled fields listed: {n}");
         assert!(!n.contains("unit"), "annotated field must not be re-nudged: {n}");

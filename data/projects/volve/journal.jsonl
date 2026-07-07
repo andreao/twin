@@ -173,3 +173,9 @@
 {"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"field\":\"proprietaryCode\",\"source\":\"witsml\",\"title\":\"Operation Type\",\"description\":\"A code representing the type of operation performed, such as drilling or circulating.\"}}"}
 {"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"field\":\"mdHoleStart\",\"source\":\"witsml\",\"title\":\"Start Depth\",\"description\":\"The measured depth at which the drilling operation began for this specific report.\"}}"}
 {"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"field\":\"mdReport\",\"source\":\"witsml\",\"title\":\"Reported Depth\",\"description\":\"The depth reported in the daily log, often matching the end hole depth but maintained for reporting consistency.\"}}"}
+{"k":"ev","p":"{\"name\":\"witsml\",\"panel\":0,\"title\":\"Mounted witsml\",\"ts\":1783451406536,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"panel\":0,\"title\":\"What’s happening\",\"ts\":1783451410819,\"type\":\"open_agent\"}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":67,\"title\":\"Step\",\"ts\":1783451442361,\"type\":\"open_step\"}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"field\":\"md\",\"source\":\"witsml\",\"title\":\"Measured Depth\",\"description\":\"The depth measured along the wellbore from the surface.\"}}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"field\":\"tvd\",\"source\":\"witsml\",\"title\":\"True Vertical Depth\",\"description\":\"The vertical depth of the wellbore from a reference datum, independent of its path along the earth's surface.\"}}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"field\":\"kind\",\"source\":\"witsml\",\"title\":\"Record Type\",\"description\":\"The classification of the WITSML record, such as a survey or a drill report, used to differentiate data types in the unified stream.\"}}"}
