@@ -10,6 +10,9 @@ use serde_json::{Map, Value};
 /// Read a local file into rows (each an object). Errors are human-readable — they go
 /// straight back to the agent (and user) as an observation.
 pub fn read_file(path: &str) -> Result<Vec<Value>, String> {
+    if std::fs::metadata(path).map(|m| m.is_dir()).unwrap_or(false) {
+        return read_dir_rows(path);
+    }
     let lower = path.to_ascii_lowercase();
     if lower.ends_with(".xlsx") {
         // binary container — bytes, not text
@@ -35,6 +38,74 @@ pub fn read_file(path: &str) -> Result<Vec<Value>, String> {
             .or_else(|_| parse_fixed_width(&text))
             .or_else(|_| parse_csv(&text, ','))
     }
+}
+
+/// Mount a whole DIRECTORY as one source: every data file under it parses through
+/// the same readers, and each row is tagged with `kind` (the object-type directory
+/// it came from — trajectory, bhaRun, log…) and `file` (its relative path, the
+/// lineage hook).  This is how a real corpus mounts — a WITSML tree is hundreds of
+/// small files per well — and the extraction lenses then carve it by `kind`.
+/// Bounded: a directory is a view, not an ingest (§15.1); the files stay put.
+fn read_dir_rows(root: &str) -> Result<Vec<Value>, String> {
+    const MAX_FILES: usize = 500;
+    const MAX_ROWS: usize = 20_000;
+    const DATA_EXT: [&str; 8] = ["xml", "las", "csv", "tsv", "json", "jsonl", "ndjson", "xlsx"];
+    let mut files = Vec::new();
+    let mut stack = vec![std::path::PathBuf::from(root)];
+    while let Some(d) = stack.pop() {
+        let rd = std::fs::read_dir(&d).map_err(|e| format!("{}: {e}", d.display()))?;
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p
+                .extension()
+                .and_then(|x| x.to_str())
+                .map(|x| DATA_EXT.contains(&x.to_ascii_lowercase().as_str()))
+                .unwrap_or(false)
+            {
+                files.push(p);
+            }
+        }
+    }
+    files.sort();
+    let mut rows = Vec::new();
+    let mut skipped = 0usize;
+    for p in files.iter().take(MAX_FILES) {
+        let rel = p
+            .strip_prefix(root)
+            .map(|r| r.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| p.to_string_lossy().into_owned());
+        // the object type is the nearest non-numeric ancestor directory
+        let kind = std::path::Path::new(&rel)
+            .parent()
+            .into_iter()
+            .flat_map(|a| a.components().rev())
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .find(|n| !n.chars().all(|c| c.is_ascii_digit()))
+            .unwrap_or_default();
+        match read_file(p.to_str().unwrap_or_default()) {
+            Ok(file_rows) => {
+                for mut r in file_rows {
+                    if let Value::Object(o) = &mut r {
+                        o.insert("kind".into(), Value::String(kind.clone()));
+                        o.insert("file".into(), Value::String(rel.clone()));
+                    }
+                    rows.push(r);
+                    if rows.len() >= MAX_ROWS {
+                        return Ok(rows);
+                    }
+                }
+            }
+            Err(_) => skipped += 1, // one odd file must not sink the mount
+        }
+    }
+    if rows.is_empty() {
+        return Err(format!(
+            "{root}: no readable data files in the directory ({skipped} skipped)"
+        ));
+    }
+    Ok(rows)
 }
 
 /// Parse a fixed-width table (well picks, survey listings): column boundaries are

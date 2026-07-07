@@ -117,3 +117,17 @@
 {"k":"ev","p":"{\"target\":{\"type\":\"open_board\"},\"title\":\"The twin\",\"ts\":1783447075011,\"type\":\"star\"}"}
 {"k":"ev","p":"{\"target\":{\"type\":\"open_board\"},\"title\":\"The twin\",\"ts\":1783447075710,\"type\":\"star\"}"}
 {"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"field\":\"mdHoleStart\",\"source\":\"drillReports\",\"title\":\"Start Depth\",\"description\":\"The measured depth at which the drilling operation began for this specific report.\"}}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"field\":\"mdReport\",\"source\":\"drillReports\",\"title\":\"Reported Depth\",\"description\":\"The depth reported in the daily log; it frequently aligns with the end hole depth but is maintained as a separate field for reporting consistency.\"}}"}
+{"k":"ev","p":"{\"name\":\"wellpicks\",\"panel\":0,\"title\":\"Formation picks\",\"ts\":1783447179092,\"type\":\"open_source\"}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"field\":\"proprietaryCode\",\"source\":\"drillReports\",\"title\":\"Operation Type\",\"description\":\"A code representing the type of operation performed, such as drilling or circulating.\"}}"}
+{"k":"tool","p":"{\"tool\":\"think\",\"args\":{\"text\":\"Annotating the 'uid' field in the Daily Drill Reports to clarify its role as a unique identifier for each report.\"}}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"source\":\"drillReports\",\"field\":\"uid\",\"title\":\"Report ID\",\"description\":\"A unique identifier for each daily drilling report, typically following a date-based pattern.\"}}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"source\":\"trajectory\",\"field\":\"md\",\"title\":\"Measured Depth\",\"description\":\"The depth measured along the wellbore from the surface.\"}}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"field\":\"azi\",\"source\":\"trajectory\",\"title\":\"Azimuth\",\"description\":\"The horizontal direction of the wellbore measured in degrees from true north.\"}}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"source\":\"trajectory\",\"field\":\"incl\",\"title\":\"Inclination\",\"description\":\"The angle of the wellbore from the vertical, measured in degrees.\"}}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"source\":\"trajectory\",\"field\":\"tvd\",\"title\":\"True Vertical Depth\",\"description\":\"The vertical depth of the wellbore measured from a reference datum, independent of its path along the earth's surface.\"}}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"source\":\"trajectory\",\"field\":\"uid\",\"title\":\"Survey Station ID\",\"description\":\"A unique identifier for each survey point along the wellbore.\"}}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"source\":\"export\",\"field\":\"family\",\"title\":\"Equipment Category\",\"description\":\"The primary classification for the record in the engineering database, such as Well or Assembly.\"}}"}
+{"k":"tool","p":"{\"tool\":\"think\",\"args\":{\"text\":\"Annotating the 'spud_date' field in the Engineering export to provide clear semantics.\"}}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"source\":\"export\",\"field\":\"spud_date\",\"title\":\"Spud Date\",\"description\":\"The date when the drilling operation officially began.\"}}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"description\":\"The unique identifier for the well in the engineering database.\",\"field\":\"well_id\",\"source\":\"export\",\"title\":\"Well ID\"}}"}

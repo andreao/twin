@@ -12,3 +12,6 @@
 !/data/volve/
 !/data/projects/
 !/data/projects/volve/
+
+# the pulled REAL corpus is data, not repo (obtain-volve github/pull)
+/data/volve/real/

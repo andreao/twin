@@ -29,6 +29,25 @@ sample() {
   status
 }
 
+# Real Volve WITSML for three wells (15/9-F-4, F-7, F-9), ~200 MB, no
+# registration: the f0nzie/volve-drilling mirror on GitHub (Equinor open
+# licence).  Lands under $OUT/real/witsml; mount a well's directory with
+# read_source and it becomes one source with kind/file on every row.
+github() {
+  if [ -d "$OUT/real/witsml" ]; then
+    echo "$OUT/real/witsml already present"; status; return
+  fi
+  local tmp
+  tmp=$(mktemp -d)
+  echo "cloning f0nzie/volve-drilling (shallow, ~200 MB)…"
+  git clone -q --depth 1 https://github.com/f0nzie/volve-drilling.git "$tmp/volve-drilling"
+  mkdir -p "$OUT/real"
+  mv "$tmp/volve-drilling/witsml" "$OUT/real/witsml"
+  rm -rf "$tmp"
+  echo "real WITSML for wells 15/9-F-4, F-7, F-9 → $OUT/real/witsml"
+  status
+}
+
 pull() {
   if [ -z "$BASE" ]; then
     echo "VOLVE_BASE is not set." >&2
@@ -57,7 +76,8 @@ pull() {
 
 case "${1:-sample}" in
   sample) sample ;;
+  github) github ;;
   pull) pull ;;
   status) status ;;
-  *) echo "usage: $0 [sample|pull|status]" >&2; exit 2 ;;
+  *) echo "usage: $0 [sample|github|pull|status]" >&2; exit 2 ;;
 esac

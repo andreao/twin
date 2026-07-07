@@ -34,9 +34,19 @@ searchable.
 
 ```
 ./skills/obtain-volve/pull_volve.sh sample     # verify the bundled offline samples (default)
+./skills/obtain-volve/pull_volve.sh github     # REAL WITSML, 3 wells, ~200 MB, no registration
 ./skills/obtain-volve/pull_volve.sh pull       # fetch from a Volve mirror into data/volve/
 ./skills/obtain-volve/pull_volve.sh status     # what's on disk right now
 ```
+
+`github` pulls the f0nzie/volve-drilling mirror: the original Statoil WITSML
+tree for wells NO 15/9-F-4, F-7 and F-9 (trajectories, BHA runs, tubulars,
+rig, geometry, messages, real-time logs — 312 files, ~780k rows, all of which
+parse through the twin's readers). Mount a WHOLE WELL with one read_source on
+its directory, e.g. `data/volve/real/witsml/Norway-Statoil-NO 15_$47$_9-F-4` —
+every row lands tagged with `kind` (the WITSML object type) and `file` (its
+lineage), and the extraction lenses carve it from there
+(`rows.filter(r => r.kind === 'trajectory')`).
 
 Tunables via env: `VOLVE_OUT` (output dir, default `data/volve`), `VOLVE_BASE`
 (HTTP base of a Volve mirror or your own extract of the official archive),
@@ -45,12 +55,19 @@ at the base).
 
 ## Access — the honest part
 
-The full Volve dataset (~5 TB with all real-time WITSML; a few GB for the useful
-drilling subset) is free but **registration-gated**: accept the license at
-https://www.equinor.com/energy/volve-data-sharing and you get a download link.
-There is no stable anonymous endpoint, so `pull` needs `VOLVE_BASE` pointed at
-either a mirror you have access to or a directory you extracted from the official
-archive and serve yourself (`python3 -m http.server` over the extract works).
+Three rungs, by effort:
+1. **`github` — now, no registration.** Real WITSML for three wells via the
+   f0nzie/volve-drilling mirror (Equinor open licence, attribution required).
+2. **The full dataset (~40,000 files)** is free but **registration-gated**: as of
+   2026 the official route is the **Databricks Marketplace** listing "Volve Data
+   Village" linked from https://www.equinor.com/energy/volve-data-sharing (a free
+   Databricks account + accepting the Equinor Open Data Licence gets you the
+   share; their "how to get access" PDF on that page walks it).
+3. **`pull` with `VOLVE_BASE`** for any mirror or your own extract of the official
+   archive served locally (`python3 -m http.server` over the extract works).
+   The 2.7 GB pre-parsed real-time drilling CSVs once at the University of
+   Stavanger (~atunkiel) are currently offline; their author is reachable if
+   that subset matters.
 
 The **bundled samples** under `data/volve/` are small, hand-authored files in the
 real formats (WITSML 1.4.1.1, LAS 2.0, EDM export, NPD-style picks, PDF) for well
