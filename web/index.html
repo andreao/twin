@@ -260,6 +260,11 @@
   .panel-body:has(> .table-scroll) > * { flex: none; }
   .panel-body:has(> .table-scroll) > .table-scroll { flex: 1 1 auto; min-height: 0; }
   .table-scroll { overflow: auto; margin: 0 -16px -16px; padding: 0 16px 16px; }
+  /* virtualized tables: row height is PINNED so scroll offset ↔ row index is exact
+     arithmetic on both ends; the spacer rows carry the off-screen height */
+  .vtable tbody td { height: 29px; padding: 0 10px; line-height: 29px; }
+  .vtable .vspace td { height: auto; padding: 0; border: none; }
+  .vtable .vspace:hover td { background: none; }
   .panel-body table, .view-body table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
   .panel-body th, .view-body th { text-align: left; position: sticky; top: 0; background: var(--bg); color: var(--muted); font-weight: 500; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
   .panel-body td, .view-body td { padding: 5px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; max-width: 300px; overflow: hidden; text-overflow: ellipsis; }
@@ -938,6 +943,7 @@
         const parent = nodes.get(m.parent);
         if (parent) insertAt(parent, el, m.index);
         wire(el, m.key);
+        if (/(^|:)exp:scroll$/.test(m.key)) wireViewport(el, m.key);
         break;
       }
       case "move": { const el = nodes.get(m.key), p = nodes.get(m.parent); if (el && p) insertAt(p, el, m.index); break; }
@@ -967,6 +973,29 @@
         break;
       }
     }
+  }
+
+  // A virtualized table scroller reports WHERE it is (first row + how many fit) so
+  // the server can render just that window. Row height is pinned server-side
+  // (data-rowh), so the mapping is arithmetic; a little overscan hides the hop.
+  function wireViewport(el, key) {
+    let timer = null;
+    const report = () => {
+      timer = null;
+      const rowh = Number(el.dataset.rowh) || 0;
+      if (!rowh) return; // not a virtualized table
+      const pm = /^p(\d+)(s?):/.exec(key);
+      if (!pm) return;
+      const ev = {
+        type: "viewport",
+        panel: Number(pm[1]),
+        first: Math.max(0, Math.floor(el.scrollTop / rowh) - 8),
+        count: Math.ceil(el.clientHeight / rowh) + 16,
+      };
+      if (pm[2]) ev.sub = true;
+      send(ev);
+    };
+    el.addEventListener("scroll", () => { if (!timer) timer = setTimeout(report, 70); }, { passive: true });
   }
 
   function autoscroll() {

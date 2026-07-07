@@ -378,13 +378,38 @@ pub fn read_series_downsampled(path: &str, target: usize) -> Vec<(i64, f64)> {
     downsample(pts, target)
 }
 
-/// Keep ~`target` evenly-spaced points (a chart doesn't need every one).
+/// Keep ~`target` points while keeping the SHAPE: the series is cut into buckets
+/// and each contributes its min and its max, in time order.  Uniform step-sampling
+/// loses exactly the points a chart exists to show — the spikes; min/max binning
+/// cannot, so an arbitrarily large series still draws every excursion.
 pub fn downsample(pts: Vec<(i64, f64)>, target: usize) -> Vec<(i64, f64)> {
     if target == 0 || pts.len() <= target {
         return pts;
     }
-    let step = (pts.len() / target).max(1);
-    pts.into_iter().step_by(step).collect()
+    let buckets = (target / 2).max(1);
+    let n = pts.len();
+    let mut out = Vec::with_capacity(buckets * 2);
+    for b in 0..buckets {
+        let lo = b * n / buckets;
+        let hi = (((b + 1) * n / buckets).max(lo + 1)).min(n);
+        let slice = &pts[lo..hi];
+        let mut min = slice[0];
+        let mut max = slice[0];
+        for &p in slice {
+            if p.1 < min.1 {
+                min = p;
+            }
+            if p.1 > max.1 {
+                max = p;
+            }
+        }
+        let (a, b2) = if min.0 <= max.0 { (min, max) } else { (max, min) };
+        out.push(a);
+        if b2 != a {
+            out.push(b2);
+        }
+    }
+    out
 }
 
 /// Materialize a series to disk (write-through cache after an on-demand fetch, §7).
@@ -491,5 +516,24 @@ mod tests {
         assert!(!paths2.iter().any(|p| p.ends_with("well1")), "mounted subtree still offered");
         assert!(paths2.iter().any(|p| p.ends_with("well2")), "unmounted sibling must remain");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn downsampling_keeps_the_spikes() {
+        // a flat series with one narrow spike and one narrow dip — uniform
+        // step-sampling would almost surely skip both; min/max binning cannot
+        let mut pts: Vec<(i64, f64)> = (0..100_000).map(|t| (t, 10.0)).collect();
+        pts[31_337].1 = 999.0;
+        pts[77_777].1 = -999.0;
+        let out = downsample(pts, 700);
+        assert!(out.len() <= 700, "bounded: {}", out.len());
+        let vs: Vec<f64> = out.iter().map(|p| p.1).collect();
+        assert!(vs.iter().any(|&v| v == 999.0), "the spike survives");
+        assert!(vs.iter().any(|&v| v == -999.0), "the dip survives");
+        // time stays monotone (within and across buckets)
+        assert!(out.windows(2).all(|w| w[0].0 <= w[1].0), "time-ordered");
+        // small series pass through untouched
+        let small: Vec<(i64, f64)> = (0..10).map(|t| (t, t as f64)).collect();
+        assert_eq!(downsample(small.clone(), 700), small);
     }
 }

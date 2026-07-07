@@ -618,6 +618,7 @@ const T = (() => {
     }
     for (const pi of [...taskPanels.keys()]) if (pi >= f) taskPanels.delete(pi);
     for (const pi of [...agentPanels]) if (pi >= f) agentPanels.delete(pi);
+    purgeLivePanels(f);
     markClosed(f);
   }
 
@@ -633,6 +634,7 @@ const T = (() => {
     }
     for (const pi of [...taskPanels.keys()]) if (pi >= p) taskPanels.delete(pi);
     for (const pi of [...agentPanels]) if (pi >= p) agentPanels.delete(pi);
+    purgeLivePanels(p);
     markClosed(Math.floor(p) + 1);
     openPanels.add(p);
     const fresh = [];
@@ -653,7 +655,7 @@ const T = (() => {
         TWIN_MUT.push({ op: 'create', key: kk, tag, parent: parent == null ? root : K(parent), index });
         fresh.push(kk);
       },
-      set(k, name, value) { TWIN_MUT.push({ op: 'setAttr', key: K(k), name, value: String(value) }); },
+      set(k, name, value) { TWIN_MUT.push({ op: 'setAttr', key: K(k), name, value: value == null ? null : String(value) }); },
       text(k, t) { TWIN_MUT.push({ op: 'setText', key: K(k), text: String(t) }); },
     };
   }
@@ -719,23 +721,34 @@ const T = (() => {
     return i;
   }
 
+  // ---- virtualized live tables (§11.7 as a viewer): the DOM holds a fixed POOL
+  // of rows riding between two spacer rows, so the browser cost is the window, not
+  // the dataset.  The client reports where it scrolled ({type:"viewport"} — pure
+  // view state: never journaled, never in the raw input stream); the server moves
+  // the window.  Data deltas patch the window in place through a graph observer —
+  // a growing source is just a table whose spacers lengthen.  Scrolling costs
+  // setText on ~a screenful; a delta costs the rows it actually touches.
+  const ROW_H = 30;           // pinned by the .vtable css — the scroll↔row mapping
+  const POOL_MAX = 120;
+  const liveTables = new Map();     // panel -> table state
+  const tableObserved = new Set();  // graph node ids already wired to liveTables
+
+  function purgeLivePanels(from) {
+    for (const p of [...liveTables.keys()]) if (p >= from) liveTables.delete(p);
+  }
+
   function renderTable(V, name, s) {
     const id = sourceIds.get(name);
     if (id === undefined) return;
-    const rows = G.stateOf(id).support().slice(0, MAX_EXPLORE_ROWS).map((r) => r.asObject());
     const cols = Object.keys(s.schema);
     const chartable = name === 'timeseries'; // a sensor row → chart its datapoints
     let i = renderSourceHeader(V, name, s, 'table');
     V.add('div', 'exp:note', null, i++); V.set('exp:note', 'class', 'explorer-note');
-    const res = residenceLabel(s);
-    const noteBits = [];
-    if (res !== 'derived') noteBits.push(res); // every lens is derived — saying so is noise
-    noteBits.push(`${cols.length} columns`, `showing ${fmtInt(rows.length)} of ${fmtInt(s.rowcount)} rows`);
-    if (chartable) noteBits.push('click a sensor to chart it');
-    V.text('exp:note', noteBits.join(' · '));
-    // the table scrolls by itself — the header above stays put
+    // the table scrolls by itself — the header above stays put; data-rowh marks
+    // the scroller as virtualized for the client's viewport reporter
     V.add('div', 'exp:scroll', null, i);
-    V.set('exp:scroll', 'class', 'table-scroll');
+    V.set('exp:scroll', 'class', 'table-scroll vtable');
+    V.set('exp:scroll', 'data-rowh', ROW_H);
     V.add('table', 'exp:tbl', 'exp:scroll', 0);
     V.add('thead', 'exp:thead', 'exp:tbl', 0);
     V.add('tr', 'exp:htr', 'exp:thead', 0);
@@ -746,12 +759,131 @@ const T = (() => {
       if (sem) V.set(`exp:th:${ci}`, 'title', sem.title ? `${c}${sem.description ? ' · ' + sem.description : ''}` : sem.description);
     });
     V.add('tbody', 'exp:tb', 'exp:tbl', 1);
-    rows.forEach((row, ri) => {
-      const rk = `exp:r:${ri}`;
-      V.add('tr', rk, 'exp:tb', ri);
-      if (chartable) { V.set(rk, 'class', 'chartable'); V.set(rk, 'data-series', row.id); V.set(rk, 'data-label', row.externalId || row.name || row.id); }
-      cols.forEach((c, ci) => { const ck = `exp:c:${ri}:${ci}`; V.add('td', ck, rk, ci); V.text(ck, row[c] == null ? '' : String(row[c])); });
+    V.add('tr', 'exp:sp:t', 'exp:tb', 0); V.set('exp:sp:t', 'class', 'vspace');
+    V.add('td', 'exp:sp:t:c', 'exp:sp:t', 0); V.set('exp:sp:t:c', 'colspan', cols.length);
+    V.add('tr', 'exp:sp:b', 'exp:tb', 1); V.set('exp:sp:b', 'class', 'vspace');
+    V.add('td', 'exp:sp:b:c', 'exp:sp:b', 0); V.set('exp:sp:b:c', 'colspan', cols.length);
+    const t = {
+      name, id, cols, chartable, V,
+      first: 0, count: 40, pool: 0,
+      order: G.stateOf(id).support(),   // arrival order; deltas maintain it below
+      cellText: new Map(), rowMeta: new Map(), hidden: new Set(),
+      spTop: -1, spBot: -1, note: '',
+    };
+    liveTables.set(V.panel, t);
+    observeTableNode(id);
+    layoutTable(t);
+  }
+
+  // render the current window: grow the pool as needed, fill cells (no-op
+  // suppressed), size the spacers, refresh the note line
+  function layoutTable(t) {
+    const s = sources.get(t.name) || {};
+    const total = t.order.length;
+    t.first = Math.max(0, Math.min(t.first, Math.max(0, total - t.count)));
+    const shown = Math.max(0, Math.min(t.count, total - t.first));
+    const V = t.V;
+    // the pool only grows (to the largest window seen), rows beyond it hide
+    for (let pi = t.pool; pi < shown; pi++) {
+      const rk = `exp:r:${pi}`;
+      V.add('tr', rk, 'exp:tb', 1 + pi); // after the top spacer
+      for (let ci = 0; ci < t.cols.length; ci++) V.add('td', `exp:c:${pi}:${ci}`, rk, ci);
+    }
+    t.pool = Math.max(t.pool, shown);
+    for (let pi = 0; pi < t.pool; pi++) {
+      const rk = `exp:r:${pi}`;
+      if (pi >= shown) {
+        if (!t.hidden.has(pi)) { V.set(rk, 'hidden', 'true'); t.hidden.add(pi); }
+        continue;
+      }
+      if (t.hidden.has(pi)) { V.set(rk, 'hidden', null); t.hidden.delete(pi); }
+      const row = t.order[t.first + pi];
+      const o = row.asObject();
+      if (t.chartable) {
+        const series = o.id == null ? '' : String(o.id);
+        if (t.rowMeta.get(pi) !== series) {
+          t.rowMeta.set(pi, series);
+          V.set(rk, 'class', 'chartable');
+          V.set(rk, 'data-series', series);
+          V.set(rk, 'data-label', o.externalId || o.name || series);
+        }
+      }
+      for (let ci = 0; ci < t.cols.length; ci++) {
+        const v = o[t.cols[ci]];
+        const text = v == null ? '' : String(v);
+        const ck = `${pi}:${ci}`;
+        if (t.cellText.get(ck) !== text) { t.cellText.set(ck, text); V.text(`exp:c:${pi}:${ci}`, text); }
+      }
+    }
+    const top = t.first * ROW_H, bot = Math.max(0, total - t.first - shown) * ROW_H;
+    if (t.spTop !== top) { t.spTop = top; V.set('exp:sp:t:c', 'style', `height:${top}px`); }
+    if (t.spBot !== bot) { t.spBot = bot; V.set('exp:sp:b:c', 'style', `height:${bot}px`); }
+    const res = residenceLabel(s);
+    const bits = [];
+    if (res !== 'derived') bits.push(res); // every lens is derived — saying so is noise
+    bits.push(`${t.cols.length} columns`);
+    bits.push(total
+      ? `rows ${fmtInt(t.first + 1)}–${fmtInt(t.first + shown)} of ${fmtInt(total)}`
+      : 'no rows yet');
+    if ((s.rowcount || 0) > total) bits.push(`${fmtInt(s.rowcount)} in the file`);
+    if (t.chartable) bits.push('click a sensor to chart it');
+    const note = bits.join(' · ');
+    if (t.note !== note) { t.note = note; V.text('exp:note', note); }
+  }
+
+  // one observer per graph node feeds every live table showing it — a delta
+  // maintains the cached order and re-lays only the windows it can touch
+  function observeTableNode(id) {
+    if (tableObserved.has(id)) return;
+    tableObserved.add(id);
+    G.observe(id, (delta) => {
+      for (const t of liveTables.values()) {
+        if (t.id !== id) continue;
+        for (const [row, w] of delta.entries()) {
+          if (w > 0) t.order.push(row);
+          else {
+            const k = zkey(row);
+            const idx = t.order.findIndex((r) => zkey(r) === k);
+            if (idx >= 0) t.order.splice(idx, 1);
+          }
+        }
+        layoutTable(t);
+      }
     });
+  }
+
+  // the client told us where a table scrolled — move that window (view state
+  // only: the caller routes this around the journal and the raw input stream)
+  function tableViewport(e) {
+    let p = Number(e.panel) || 0;
+    if (e.sub) p += 0.5;
+    const t = liveTables.get(p);
+    if (!t) return;
+    const count = Math.max(10, Math.min(POOL_MAX, Math.floor(Number(e.count) || t.count)));
+    const first = Math.max(0, Math.floor(Number(e.first) || 0));
+    if (first === t.first && count === t.count) return;
+    t.first = first;
+    t.count = count;
+    layoutTable(t);
+  }
+
+  // rows appended at the boundary (a watched file grew, a peer streamed) — the
+  // graph takes them as an ordinary +delta; open tables patch via the observer.
+  // With no rows it is a counts-only move (a partial mount's file grew).
+  function appendRows(name, meta, rows) {
+    const s = sources.get(name);
+    if (!s) return;
+    if (meta && meta.rowcount != null) s.rowcount = meta.rowcount;
+    if (rows && rows.length) {
+      const id = sourceIds.get(name);
+      if (id !== undefined) {
+        G.submit(id, ZSet.fromRows(rows.map((r) => rec(r))), prov('upstream'));
+        s.materialized = (s.materialized || 0) + rows.length;
+        if (s.rowcount != null && s.materialized > s.rowcount) s.rowcount = s.materialized;
+      }
+    }
+    sourcesPanel.set(name, s); // the board tile's counts stay live
+    for (const t of liveTables.values()) if (t.name === name) layoutTable(t);
   }
 
   // asset hierarchy tree (§11.15) — the equipment structure, enriched at a glance with
@@ -2055,6 +2187,10 @@ const T = (() => {
   function event(json) {
     let e; try { e = JSON.parse(json); } catch (_) { return; }
     if (!e || typeof e.type !== 'string') return;
+    // a viewport report is VIEW state, not twin state: it moves a table's window
+    // and touches neither the raw input stream nor the journal (like mouse
+    // position, it re-derives from the next scroll — replaying it means nothing)
+    if (e.type === 'viewport') { tableViewport(e); return; }
     inputSeq += 1;
     const raw = Object.assign({ seq: inputSeq, ts: 0 }, e);
     G.submit(inputSrc, ZSet.fromRows([rec(raw)]), { author: 'user', origin: 'ui', note: 'raw' });
@@ -2220,7 +2356,7 @@ const T = (() => {
   }
 
   return {
-    agentTool, event, perceive, mountSource, sourceError, installSkill,
+    agentTool, event, perceive, mountSource, sourceError, installSkill, appendRows,
     chartSeries, chartMessage, chartInline, chartInlineMessage,
     // host-side effects (OCR, search, fetches) report into the same activity log
     log(kind, text, detail, subject, tone) { logStep(kind, text, { detail, subject, tone }); },

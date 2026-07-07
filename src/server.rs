@@ -369,7 +369,31 @@ fn graph_loop(
     // invariant: `cursor` == total mutations already broadcast to all live clients.
     let mut cursor = g.twin_total();
 
-    for cmd in rx {
+    // Watched mounts poll on the command loop's idle beat: a stat per file when
+    // quiet, appended rows streamed in as +deltas when a file grew (§9.9 live).
+    let mut last_poll = std::time::Instant::now();
+    let poll_mounts = |g: &mut JsGraph, cursor: &mut usize, clients: &mut Vec<Sender<String>>| {
+        for line in g.twin_poll_mounts() {
+            println!("[stream] {line}");
+        }
+        broadcast_new(g, cursor, clients);
+    };
+
+    loop {
+        let cmd = match rx.recv_timeout(std::time::Duration::from_millis(1200)) {
+            Ok(cmd) => cmd,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                poll_mounts(&mut g, &mut cursor, &mut clients);
+                last_poll = std::time::Instant::now();
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        };
+        // under steady traffic the timeout never fires — keep the beat by hand
+        if last_poll.elapsed().as_millis() > 2500 {
+            poll_mounts(&mut g, &mut cursor, &mut clients);
+            last_poll = std::time::Instant::now();
+        }
         match cmd {
             Cmd::Connect(tx) => {
                 // full snapshot [0..now); replaying it rebuilds the current DOM exactly.
@@ -392,10 +416,14 @@ fn graph_loop(
                     // EVERY user action is captured in its rawest form (§8 pure event
                     // sourcing): stamp arrival time at the boundary, apply it (raw capture
                     // + derivations + any boundary fetch), and journal it for replay.
+                    // One exception: viewport reports are VIEW state (where a table is
+                    // scrolled) — applied for the window move, never journaled.
                     v["ts"] = serde_json::json!(now_ms());
                     let stamped = v.to_string();
                     apply_event(&mut g, &stamped);
-                    journal_append(&mut journal, "ev", &stamped);
+                    if etype != "viewport" {
+                        journal_append(&mut journal, "ev", &stamped);
+                    }
                     if etype == "pause" || etype == "resume" {
                         note_pause(&paused, &stamped);
                         let msg = twin_state_msg(&paused);

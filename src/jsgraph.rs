@@ -24,6 +24,36 @@ pub struct JsGraph {
     branch: Branch,
     #[allow(dead_code)]
     defs: DefinitionStore,
+    /// File-backed mounts being WATCHED for growth (§9.9 boundary, made live):
+    /// the server polls these between commands; appended rows stream into the
+    /// graph as ordinary +deltas, so open views update like any other change.
+    watches: Vec<MountWatch>,
+}
+
+/// Rows evaluated into V8 per call — bounds the eval string, not the mount.
+const MOUNT_CHUNK: usize = 4000;
+
+/// The in-heap materialization bound (§15.1): how many rows of a mounted file
+/// live in the graph.  The DOM no longer cares (views are windowed), so this is
+/// purely a heap/boot-time policy — override with TWIN_MATERIALIZE_CAP.
+fn materialize_cap() -> usize {
+    std::env::var("TWIN_MATERIALIZE_CAP")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5000)
+}
+
+/// One watched mount: where the file is, how far into it the graph reaches.
+struct MountWatch {
+    name: String,
+    path: String,
+    /// rows already IN the graph (== the file's row count when fully materialized)
+    rows_seen: usize,
+    /// byte length at last look — the cheap change signal (a stat, not a read)
+    len: u64,
+    /// mounted-partial: the graph holds a bounded prefix; growth only moves the
+    /// counts, it does not stream rows (residence policy stays the user's call)
+    partial: bool,
 }
 
 impl JsGraph {
@@ -46,7 +76,7 @@ impl JsGraph {
         let combined = format!("{}\n{}\n{}\n{}", JS_ZSET, JS_GRAPH, JS_TABLE, JS_MILESTONE);
         rt.eval(&branch, &combined).expect("load JS runtime");
 
-        JsGraph { rt, branch, defs }
+        JsGraph { rt, branch, defs, watches: Vec::new() }
     }
 
     /// Load only the dataflow runtime (Z-sets, lenses, scheduler, table) — for
@@ -56,7 +86,7 @@ impl JsGraph {
         let branch = rt.branch("main", false);
         let combined = format!("{}\n{}\n{}", JS_ZSET, JS_GRAPH, JS_TABLE);
         rt.eval(&branch, &combined).expect("load JS dataflow runtime");
-        JsGraph { rt, branch, defs: DefinitionStore::new() }
+        JsGraph { rt, branch, defs: DefinitionStore::new(), watches: Vec::new() }
     }
 
     /// Load the runtime + the twin app graph (§9, §11) into a fresh V8 branch and
@@ -69,7 +99,7 @@ impl JsGraph {
             JS_ZSET, JS_GRAPH, JS_TABLE, JS_VIEWS, JS_TWIN
         );
         rt.eval(&branch, &combined).expect("load twin graph");
-        JsGraph { rt, branch, defs: DefinitionStore::new() }
+        JsGraph { rt, branch, defs: DefinitionStore::new(), watches: Vec::new() }
     }
 
     /// Total length of the append-only mutation stream (§11.3).
@@ -220,21 +250,41 @@ impl JsGraph {
     /// Mount a local file as a source (§9.9) — federation, not export.  We materialize
     /// only a bounded subset in-heap (§15.1 disposable view); if the file is larger,
     /// it stays `mounted-partial` (the selective-sync point of the residence model).
-    /// The file remains the source of truth.  Returns a short status for dev logs.
+    /// The file remains the source of truth — and stays WATCHED: growth streams in
+    /// (see `twin_poll_mounts`).  Returns a short status for dev logs.
     pub fn twin_read_source(&mut self, name: &str, path: &str, mode: &str) -> String {
-        const MATERIALIZE_CAP: usize = 5000;
+        let cap = materialize_cap();
         match crate::source::read_file(path) {
             Ok(rows) => {
                 let total = rows.len();
-                let take = total.min(MATERIALIZE_CAP);
+                let take = total.min(cap);
                 let residence = if total > take { "mounted-partial" } else { mode };
-                let rows_json = serde_json::to_string(&rows[..take]).unwrap_or_else(|_| "[]".into());
+                // mount the first slice, stream the rest in bounded chunks — one
+                // giant eval would spike the heap for nothing
+                let first = take.min(MOUNT_CHUNK);
+                let rows_json = serde_json::to_string(&rows[..first]).unwrap_or_else(|_| "[]".into());
                 let meta = serde_json::json!({
                     "locator": path, "residence": residence,
-                    "rowcount": total, "materialized": take,
+                    // the first chunk's rows — appendRows accumulates the rest
+                    "rowcount": total, "materialized": first,
                 })
                 .to_string();
                 self.call(&format!("T.mountSource({name:?}, {meta}, {rows_json})"));
+                for chunk in rows[first..take].chunks(MOUNT_CHUNK) {
+                    let cj = serde_json::to_string(chunk).unwrap_or_else(|_| "[]".into());
+                    self.call(&format!("T.appendRows({name:?}, {{}}, {cj})"));
+                }
+                if std::path::Path::new(path).is_file() {
+                    let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+                    self.watches.retain(|w| w.name != name);
+                    self.watches.push(MountWatch {
+                        name: name.to_string(),
+                        path: path.to_string(),
+                        rows_seen: total,
+                        len,
+                        partial: total > take,
+                    });
+                }
                 format!("mounted {name}: {total} rows ({residence})")
             }
             Err(e) => {
@@ -242,6 +292,51 @@ impl JsGraph {
                 format!("read_source error: {e}")
             }
         }
+    }
+
+    /// Look at every watched mount; if a file GREW, stream its appended rows into
+    /// the graph as a +delta (the same path any adapter delta takes — open views
+    /// patch incrementally).  A stat per file when nothing changed; a re-read only
+    /// on growth.  Partial mounts move their counts, not their rows (§15.1).
+    /// Returns one status line per source that changed.
+    pub fn twin_poll_mounts(&mut self) -> Vec<String> {
+        let mut out = Vec::new();
+        for i in 0..self.watches.len() {
+            let (name, path, rows_seen, len, partial) = {
+                let w = &self.watches[i];
+                (w.name.clone(), w.path.clone(), w.rows_seen, w.len, w.partial)
+            };
+            let Ok(md) = std::fs::metadata(&path) else { continue };
+            if md.len() == len {
+                continue;
+            }
+            if md.len() < len {
+                // rewritten/truncated: not an append — leave the mounted view as-is
+                // (a remount is an explicit act), just stop re-reading every poll
+                self.watches[i].len = md.len();
+                continue;
+            }
+            let Ok(rows) = crate::source::read_file(&path) else {
+                self.watches[i].len = md.len();
+                continue;
+            };
+            let total = rows.len();
+            if total > rows_seen {
+                if partial {
+                    self.call(&format!("T.appendRows({name:?}, {{\"rowcount\":{total}}}, [])"));
+                    out.push(format!("{name}: {total} rows in the file now (bounded view unchanged)"));
+                } else {
+                    for chunk in rows[rows_seen..].chunks(MOUNT_CHUNK) {
+                        let cj = serde_json::to_string(chunk).unwrap_or_else(|_| "[]".into());
+                        self.call(&format!("T.appendRows({name:?}, {{\"rowcount\":{total}}}, {cj})"));
+                    }
+                    out.push(format!("{name}: +{} row(s) streamed in", total - rows_seen));
+                }
+                self.watches[i].rows_seen = total;
+            }
+            self.watches[i].len = md.len();
+        }
+        out
     }
 
     /// Evaluate an expression against the graph branch (returns the JS result).
