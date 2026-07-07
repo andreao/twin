@@ -194,11 +194,14 @@
   .src-d { font-size: 11.5px; color: var(--muted); margin-top: 7px; }
   .tile-h { font-size: 13.5px; font-weight: 600; margin-bottom: 8px; }
   .lens-code { font-family: ui-monospace, "SF Mono", monospace; font-size: 11px; line-height: 1.6; background: #f4f2ee; border: 1px solid var(--line); padding: 10px 12px; border-radius: 8px; margin: 2px 0 12px; white-space: pre-wrap; word-break: break-word; color: #55504a; max-height: 200px; overflow-y: auto; }
-  /* the derivation breadcrumb: quiet, one type size, code behind a toggle */
-  .lens-chain { font-size: 12px; color: var(--muted); margin: 6px 0 12px; display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; }
-  .chain-part { color: var(--ink); }
-  .chain-part.here { font-weight: 600; }
-  .chain-sep { color: var(--muted); }
+  /* the derivation breadcrumb: each hop a chip — ancestors are doorways, the
+     current lens emphasized — with the code behind a toggle at the far end */
+  .lens-chain { margin: 10px 0 2px; display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+  .chain-part { border: 1px solid var(--line); background: var(--panel); border-radius: 99px; padding: 2px 11px; font: inherit; font-size: 11.5px; color: var(--ink); }
+  button.chain-part { cursor: pointer; transition: border-color .12s, background .12s; }
+  button.chain-part:hover { border-color: var(--accent); background: var(--accent-soft); }
+  .chain-part.here { background: var(--accent-soft); border-color: #eeddd4; color: #7a4a38; font-weight: 600; }
+  .chain-sep { color: var(--muted); font-size: 11px; }
   /* one small button at the line's far end, in the UI face — mono is for the code itself */
   .code-toggle { margin-left: auto; border: 1px solid var(--line); background: var(--panel); border-radius: 7px; padding: 2px 10px; font: inherit; font-size: 11px; color: var(--muted); cursor: pointer; }
   .code-toggle:hover { border-color: var(--accent); color: var(--accent); }
@@ -215,7 +218,6 @@
      note, field guide) stays put while the data moves under the sticky th row */
   .panel-body:has(> .table-scroll) { display: flex; flex-direction: column; overflow: hidden; }
   .panel-body:has(> .table-scroll) > * { flex: none; }
-  .panel-body:has(> .table-scroll) > .field-guide { max-height: 200px; overflow-y: auto; }
   .panel-body:has(> .table-scroll) > .table-scroll { flex: 1 1 auto; min-height: 0; }
   .table-scroll { overflow: auto; margin: 0 -16px -16px; padding: 0 16px 16px; }
   .panel-body table, .view-body table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
@@ -223,12 +225,6 @@
   .panel-body td, .view-body td { padding: 5px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; max-width: 300px; overflow: hidden; text-overflow: ellipsis; }
   .panel-body tr:hover td, .view-body tr:hover td { background: var(--panel); }
   .explorer-note { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
-  /* the field guide: what the twin understood about each column, one quiet line
-     each — every line opens the source's full Schema view */
-  .field-guide { border: 1px solid var(--line); border-radius: 9px; padding: 8px 12px; margin: 0 0 12px; background: var(--panel); }
-  .field-line { font-size: 12px; color: var(--muted); line-height: 1.7; }
-  .field-line.linkable { cursor: pointer; }
-  .field-line.linkable:hover { color: var(--accent); }
   /* the schema as a page: reference cells are doorways to the schema they name */
   .sch-field { font-family: ui-monospace, "SF Mono", monospace; font-size: 11.5px; }
   .sch-desc { white-space: normal !important; min-width: 180px; }
@@ -615,7 +611,7 @@
       else if (k.startsWith("mode:")) el.addEventListener("click", () => { const parts = k.split(":"); const mode = parts.pop(); const name = parts.slice(1).join(":"); openFromEv(base, panels[base] ? panels[base].title : name, { type: "open_source", name, mode }); });
       // schema doorways: a reference cell, a field-guide line, or a map node
       else if (k.startsWith("sch:ref:")) el.addEventListener("click", () => openFromEv(base + 1, el.dataset.title || el.dataset.name, { type: "open_source", name: el.dataset.name, mode: "schema" }));
-      else if (/^exp:fg:\d+$/.test(k)) el.addEventListener("click", () => openFromEv(base, el.dataset.title || el.dataset.name, { type: "open_source", name: el.dataset.name, mode: "schema" }));
+      else if (/^exp:lp\d+$/.test(k)) el.addEventListener("click", () => { if (el.dataset.name) openFromEv(base, el.dataset.title || el.dataset.name, { type: "open_source", name: el.dataset.name }); });
       else if (k.startsWith("smn:")) el.addEventListener("click", () => openFromEv(base + 1, el.dataset.title || k.slice(4), { type: "open_source", name: k.slice(4), mode: "schema" }));
       else if (/^iss:[^:]+:\d+:\d+$/.test(k)) el.addEventListener("click", () => openFromEv(base + 1, "Asset", { type: "open_asset", id: k.split(":")[1] }));
       return;

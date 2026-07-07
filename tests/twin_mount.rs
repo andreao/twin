@@ -648,7 +648,12 @@ fn lens_columns_inherit_upstream_field_semantics() {
     g.twin_event(r#"{"type":"open_source","name":"lens:hot-gearboxes","panel":0}"#);
     let t = g.twin_from(0);
     assert!(t.contains("Gearbox temperature"), "lens column did not inherit the upstream title: {t}");
-    assert!(t.contains("Degrees C at the gearbox bearing."), "lens field guide did not inherit the description: {t}");
+    // …and its Schema page carries the inherited description
+    g.twin_event(r#"{"type":"open_source","name":"lens:hot-gearboxes","mode":"schema","panel":0}"#);
+    let sch = g.twin_from(0);
+    assert!(sch.contains("Degrees C at the gearbox bearing."), "lens schema did not inherit the description: {sch}");
+    // the derivation chain renders as chips: the ancestor is a doorway, this hop is marked
+    assert!(sch.contains(r#""tag":"button"#) && sch.contains("chain-part here"), "chain not chips: {sch}");
 }
 
 #[test]

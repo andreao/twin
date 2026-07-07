@@ -647,10 +647,40 @@ const T = (() => {
   // per-source view modes (§11.15: several lenses over the same data) — every
   // table source carries a Schema view; some carry richer ones on top
   const MODES = { assets: [['table', 'Table'], ['tree', 'Hierarchy']], events: [['table', 'Table'], ['timeline', 'Timeline']] };
-  function renderModes(V, name, current) {
+  function renderModes(V, name, current, index) {
     const modes = [...(MODES[name] || [['table', 'Table']]), ['schema', 'Schema']];
-    V.add('div', 'exp:modes', null, 0); V.set('exp:modes', 'class', 'view-modes');
+    V.add('div', 'exp:modes', null, index || 0); V.set('exp:modes', 'class', 'view-modes');
     modes.forEach(([m, lbl], i) => { const k = `mode:${name}:${m}`; V.add('button', k, 'exp:modes', i); V.set(k, 'class', 'mode-btn' + (m === current ? ' active' : '')); V.text(k, lbl); });
+  }
+
+  // Every view of a source opens the same way: what it IS (the description),
+  // where it CAME FROM (the derivation chain — each ancestor a chip you can
+  // open, the code behind a toggle), then how to look at it (the switcher).
+  // Field structure lives on the Schema page, not in the table header.
+  function renderSourceHeader(V, name, s, current) {
+    let i = 0;
+    if (s.description) {
+      V.add('div', 'exp:desc', null, i++); V.set('exp:desc', 'class', 'src-desc');
+      V.text('exp:desc', s.description);
+    }
+    if (s.code) {
+      V.add('div', 'exp:lin', null, i++); V.set('exp:lin', 'class', 'lens-chain');
+      const parts = chainOf(name);
+      parts.forEach((p, pi) => {
+        if (pi) { V.add('span', `exp:lsep${pi}`, 'exp:lin', pi * 2 - 1); V.set(`exp:lsep${pi}`, 'class', 'chain-sep'); V.text(`exp:lsep${pi}`, '→'); }
+        const k = `exp:lp${pi}`;
+        const here = pi === parts.length - 1;
+        V.add(here ? 'span' : 'button', k, 'exp:lin', pi * 2);
+        V.set(k, 'class', 'chain-part' + (here ? ' here' : ''));
+        if (!here) { V.set(k, 'data-name', p.name); V.set(k, 'data-title', p.title); }
+        V.text(k, p.title);
+      });
+      V.add('button', 'exp:codebtn', 'exp:lin', parts.length * 2); V.set('exp:codebtn', 'class', 'code-toggle'); V.text('exp:codebtn', 'code');
+      V.add('div', 'exp:code', null, i++); V.set('exp:code', 'class', 'lens-code'); V.set('exp:code', 'hidden', 'true');
+      V.text('exp:code', s.code);
+    }
+    renderModes(V, name, current, i++);
+    return i;
   }
 
   function renderTable(V, name, s) {
@@ -659,26 +689,7 @@ const T = (() => {
     const rows = G.stateOf(id).support().slice(0, MAX_EXPLORE_ROWS).map((r) => r.asObject());
     const cols = Object.keys(s.schema);
     const chartable = name === 'timeseries'; // a sensor row → chart its datapoints
-    renderModes(V, name, 'table');
-    let i = 1;
-    // deep inspection of a derived lens: its description, then the derivation chain
-    // as a quiet breadcrumb (walked over the from-links), with the code of this hop
-    // behind a small toggle at the line's far end — never a slab of code by default.
-    if (s.code) {
-      if (s.description) {
-        V.add('div', 'exp:desc', null, i++); V.set('exp:desc', 'class', 'src-desc');
-        V.text('exp:desc', s.description);
-      }
-      V.add('div', 'exp:lin', null, i++); V.set('exp:lin', 'class', 'lens-chain');
-      const parts = chainOf(name);
-      parts.forEach((p, pi) => {
-        if (pi) { V.add('span', `exp:lsep${pi}`, 'exp:lin', pi * 2 - 1); V.set(`exp:lsep${pi}`, 'class', 'chain-sep'); V.text(`exp:lsep${pi}`, '→'); }
-        V.add('span', `exp:lp${pi}`, 'exp:lin', pi * 2); V.set(`exp:lp${pi}`, 'class', 'chain-part' + (pi === parts.length - 1 ? ' here' : '')); V.text(`exp:lp${pi}`, p);
-      });
-      V.add('button', 'exp:codebtn', 'exp:lin', parts.length * 2); V.set('exp:codebtn', 'class', 'code-toggle'); V.text('exp:codebtn', 'code');
-      V.add('div', 'exp:code', null, i++); V.set('exp:code', 'class', 'lens-code'); V.set('exp:code', 'hidden', 'true');
-      V.text('exp:code', s.code);
-    }
+    let i = renderSourceHeader(V, name, s, 'table');
     V.add('div', 'exp:note', null, i++); V.set('exp:note', 'class', 'explorer-note');
     const res = residenceLabel(s);
     const noteBits = [];
@@ -686,30 +697,7 @@ const T = (() => {
     noteBits.push(`${cols.length} columns`, `showing ${fmtInt(rows.length)} of ${fmtInt(s.rowcount)} rows`);
     if (chartable) noteBits.push('click a sensor to chart it');
     V.text('exp:note', noteBits.join(' · '));
-    // an undocumented table offers its own way out, right where you notice it
-    if (!s.code && cols.some((c) => !((fieldMeta.get(`${name}|${c}`) || {}).title))) {
-      V.add('button', 'exp:annbtn', null, i++); V.set('exp:annbtn', 'class', 'steps-toggle');
-      V.set('exp:annbtn', 'data-title', srcTitle(name)); V.text('exp:annbtn', 'document the fields');
-    }
-    // the field guide: what the twin has understood about each column — inferred
-    // structure (keys, references, enums, patterns) and the agent's annotations.
-    const lines = fieldLines(name);
-    const guide = cols
-      .filter((c) => {
-        const m = fieldMeta.get(`${name}|${c}`) || {};
-        return semanticsOf(name, c) || m.role || m.pattern;
-      })
-      .map((c) => lines.find((l) => l.startsWith(`${c}:`)) || c);
-    if (guide.length) {
-      V.add('div', 'exp:fg', null, i++); V.set('exp:fg', 'class', 'field-guide');
-      guide.forEach((line, gi) => {
-        const k = `exp:fg:${gi}`;
-        V.add('div', k, 'exp:fg', gi); V.set(k, 'class', 'field-line linkable');
-        V.set(k, 'data-name', name); V.set(k, 'data-title', srcTitle(name));
-        V.text(k, line);
-      });
-    }
-    // the table scrolls by itself — description, chain, and field guide stay put
+    // the table scrolls by itself — the header above stays put
     V.add('div', 'exp:scroll', null, i);
     V.set('exp:scroll', 'class', 'table-scroll');
     V.add('table', 'exp:tbl', 'exp:scroll', 0);
@@ -805,10 +793,14 @@ const T = (() => {
   // points at, so you walk the graph entity by entity.
   function renderSchema(V, name, s) {
     const cols = Object.keys(s.schema || {});
-    renderModes(V, name, 'schema');
-    let i = 1;
+    let i = renderSourceHeader(V, name, s, 'schema');
     V.add('div', 'exp:note', null, i++); V.set('exp:note', 'class', 'explorer-note');
     V.text('exp:note', `${cols.length} fields · what the twin understands about ${srcTitle(name)} · references open the schema they point at`);
+    // an undocumented schema offers its own way out, right where you see the gap
+    if (cols.some((c) => !((fieldMeta.get(`${name}|${c}`) || {}).title))) {
+      V.add('button', 'exp:annbtn', null, i++); V.set('exp:annbtn', 'class', 'steps-toggle');
+      V.set('exp:annbtn', 'data-title', srcTitle(name)); V.text('exp:annbtn', 'document the fields');
+    }
     V.add('div', 'exp:scroll', null, i); V.set('exp:scroll', 'class', 'table-scroll');
     V.add('table', 'sch:tbl', 'exp:scroll', 0);
     V.add('thead', 'sch:hd', 'sch:tbl', 0); V.add('tr', 'sch:htr', 'sch:hd', 0);
@@ -1588,8 +1580,8 @@ const T = (() => {
     let cur = name, guard = 0;
     while (cur && guard++ < 12) {
       const s = sources.get(cur);
-      if (!s) { parts.unshift(cur); break; }
-      parts.unshift(s.title || cur);
+      if (!s) { parts.unshift({ name: cur, title: cur }); break; }
+      parts.unshift({ name: cur, title: s.title || cur });
       cur = s.from;
     }
     return parts;

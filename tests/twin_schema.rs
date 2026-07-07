@@ -129,12 +129,16 @@ fn agent_annotates_a_field_and_the_ui_follows() {
     let seen = g.twin_perceive();
     assert!(seen.contains("“Measured equipment”"), "annotation not perceived: {seen}");
     assert!(seen.contains("mounted on"), "field description not perceived: {seen}");
-    // the table renders the human title as the column header, and the field guide
-    // explains the annotated column
+    // the table renders the human title as the column header; the structure
+    // lives on the source's Schema page (no field guide cluttering the table)
     g.twin_event(r#"{"type":"open_source","name":"timeseries"}"#);
     let muts = g.twin_from(0);
     assert!(muts.contains("Measured equipment"), "header not humanized: {muts}");
-    assert!(muts.contains("field-guide"), "no field guide on the source page: {muts}");
+    assert!(!muts.contains("field-guide"), "field guide back on the table page: {muts}");
+    g.twin_event(r#"{"type":"open_source","name":"timeseries","mode":"schema"}"#);
+    let sch = g.twin_from(0);
+    assert!(sch.contains("sch:tbl") && sch.contains("The equipment this instrument is mounted on."),
+        "schema page missing the annotation: {sch}");
     // annotating a field that does not exist fails with the real field list
     g.twin_agent_tool(r#"{"tool":"annotate","args":{"source":"timeseries","field":"nope","title":"X"}}"#);
     let m = g.twin_from(0);
