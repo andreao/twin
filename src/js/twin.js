@@ -498,7 +498,25 @@ const T = (() => {
     sourcesPanel.set(name, info);
     profileSource(name); // first-pass schema inference, the moment the data lands
     schemaGapCheck(name); // an undocumented schema is an ISSUE, on the board from birth
+    ensureSchemaTile(); // the board's way into the schema map, from the first mount
     info.cardSeq = workCard(`Mounted ${info.title}`, info.description, mountMeta(info), { type: 'open_source', name });
+  }
+
+  // One board tile into the schema map, created with the first mount — the twin's
+  // structure is browsable the moment it has any.
+  let schemaTileMade = false;
+  function ensureSchemaTile() {
+    if (schemaTileMade) return;
+    schemaTileMade = true;
+    TWIN_MUT.push({ op: 'create', key: 'tile:schemamap', tag: 'div', parent: 'board-root', index: 0 });
+    TWIN_MUT.push({ op: 'setAttr', key: 'tile:schemamap', name: 'class', value: 'src-row' });
+    TWIN_MUT.push({ op: 'setAttr', key: 'tile:schemamap', name: 'data-title', value: 'Schema map' });
+    TWIN_MUT.push({ op: 'create', key: 'tile:schemamap:n', tag: 'div', parent: 'tile:schemamap', index: 0 });
+    TWIN_MUT.push({ op: 'setAttr', key: 'tile:schemamap:n', name: 'class', value: 'src-n' });
+    TWIN_MUT.push({ op: 'setText', key: 'tile:schemamap:n', text: 'Schema map' });
+    TWIN_MUT.push({ op: 'create', key: 'tile:schemamap:d', tag: 'div', parent: 'tile:schemamap', index: 1 });
+    TWIN_MUT.push({ op: 'setAttr', key: 'tile:schemamap:d', name: 'class', value: 'src-d' });
+    TWIN_MUT.push({ op: 'setText', key: 'tile:schemamap:d', text: 'every source and lens, their fields, and how they reference each other' });
   }
 
   // The quiet facts line of a mount card — separate from the description, so prose
@@ -620,16 +638,17 @@ const T = (() => {
     if (!s) return;
     const V = viewer(panel, title || srcTitle(name), { type: 'open_source', name, mode: mode || '' });
     if (s.kind === 'documents') return renderDocuments(V, s);
+    if (mode === 'schema') return renderSchema(V, name, s);
     if (mode === 'tree' && name === 'assets') return renderTree(V, name, s);
     if (mode === 'timeline' && name === 'events') return renderTimeline(V, name, s);
     renderTable(V, name, s);
   }
 
-  // per-source view modes (§11.15: several lenses over the same data)
+  // per-source view modes (§11.15: several lenses over the same data) — every
+  // table source carries a Schema view; some carry richer ones on top
   const MODES = { assets: [['table', 'Table'], ['tree', 'Hierarchy']], events: [['table', 'Table'], ['timeline', 'Timeline']] };
   function renderModes(V, name, current) {
-    const modes = MODES[name];
-    if (!modes) return;
+    const modes = [...(MODES[name] || [['table', 'Table']]), ['schema', 'Schema']];
     V.add('div', 'exp:modes', null, 0); V.set('exp:modes', 'class', 'view-modes');
     modes.forEach(([m, lbl], i) => { const k = `mode:${name}:${m}`; V.add('button', k, 'exp:modes', i); V.set(k, 'class', 'mode-btn' + (m === current ? ' active' : '')); V.text(k, lbl); });
   }
@@ -685,7 +704,8 @@ const T = (() => {
       V.add('div', 'exp:fg', null, i++); V.set('exp:fg', 'class', 'field-guide');
       guide.forEach((line, gi) => {
         const k = `exp:fg:${gi}`;
-        V.add('div', k, 'exp:fg', gi); V.set(k, 'class', 'field-line');
+        V.add('div', k, 'exp:fg', gi); V.set(k, 'class', 'field-line linkable');
+        V.set(k, 'data-name', name); V.set(k, 'data-title', srcTitle(name));
         V.text(k, line);
       });
     }
@@ -777,6 +797,121 @@ const T = (() => {
     });
     V.add('text', 'exp:lmin', 'exp:svg', months.length + 1); V.set('exp:lmin', 'x', pad); V.set('exp:lmin', 'y', H - pad + 16); V.set('exp:lmin', 'class', 'chart-xlbl'); V.text('exp:lmin', mstr(lo));
     V.add('text', 'exp:lmax', 'exp:svg', months.length + 2); V.set('exp:lmax', 'x', W - pad); V.set('exp:lmax', 'y', H - pad + 16); V.set('exp:lmax', 'class', 'chart-xlbl endlbl'); V.text('exp:lmax', mstr(hi));
+  }
+
+  // The schema AS A PAGE (§8: schema is data, so it gets a view like any data):
+  // one row per field — its name, its human title, its type, its structure, and
+  // what it means.  References are doorways: clicking one opens the schema it
+  // points at, so you walk the graph entity by entity.
+  function renderSchema(V, name, s) {
+    const cols = Object.keys(s.schema || {});
+    renderModes(V, name, 'schema');
+    let i = 1;
+    V.add('div', 'exp:note', null, i++); V.set('exp:note', 'class', 'explorer-note');
+    V.text('exp:note', `${cols.length} fields · what the twin understands about ${srcTitle(name)} · references open the schema they point at`);
+    V.add('div', 'exp:scroll', null, i); V.set('exp:scroll', 'class', 'table-scroll');
+    V.add('table', 'sch:tbl', 'exp:scroll', 0);
+    V.add('thead', 'sch:hd', 'sch:tbl', 0); V.add('tr', 'sch:htr', 'sch:hd', 0);
+    ['Field', 'Title', 'Type', 'Structure', 'Description'].forEach((h, hi) => { V.add('th', `sch:h${hi}`, 'sch:htr', hi); V.text(`sch:h${hi}`, h); });
+    V.add('tbody', 'sch:tb', 'sch:tbl', 1);
+    cols.forEach((c, ri) => {
+      const m = fieldMeta.get(`${name}|${c}`) || {};
+      const sem = semanticsOf(name, c) || {};
+      const rk = `sch:r${ri}`;
+      V.add('tr', rk, 'sch:tb', ri);
+      const td = (k, ci, txt, cls) => {
+        V.add('td', k, rk, ci);
+        if (cls) V.set(k, 'class', cls);
+        if (txt) V.text(k, txt);
+        return k;
+      };
+      td(`sch:f${ri}`, 0, c, 'sch-field');
+      td(`sch:t${ri}`, 1, sem.title || '');
+      td(`sch:y${ri}`, 2, m.type && m.type !== 'empty' ? m.type : '');
+      // structure: the plain facts as text, the reference as a clickable doorway
+      const bits = [];
+      if (m.role === 'key') bits.push('unique key');
+      else if (m.role === 'enum') bits.push(`one of: ${m.values}`);
+      else if (m.role === 'constant') bits.push(`always “${m.values}”`);
+      else if (m.role === 'redundant') bits.push(m.overlap ? `duplicates ${m.refField} on ${m.overlap}% of rows` : `duplicates ${m.refField}`);
+      if (m.pattern) bits.push(`pattern ${m.pattern} (${m.coverage}%)`);
+      if (m.empty) bits.push(m.empty >= 100 ? 'always empty' : `${m.empty}% empty`);
+      const sk = td(`sch:s${ri}`, 3, null);
+      const isRef = m.role === 'ref' || m.role === 'refs';
+      if (bits.length || isRef) {
+        V.add('span', `${sk}:x`, sk, 0); V.text(`${sk}:x`, bits.join(' · ') + (bits.length && isRef ? ' · ' : ''));
+        if (isRef) {
+          V.add('span', `sch:ref:${ri}`, sk, 1); V.set(`sch:ref:${ri}`, 'class', 'sch-ref');
+          V.set(`sch:ref:${ri}`, 'data-name', m.ref); V.set(`sch:ref:${ri}`, 'data-title', srcTitle(m.ref));
+          V.text(`sch:ref:${ri}`, `${m.role === 'refs' ? 'multi-references' : 'references'} ${srcTitle(m.ref)}.${m.refField}`);
+        }
+      }
+      td(`sch:d${ri}`, 4, sem.description || '', 'sch-desc');
+    });
+  }
+
+  // The whole schema AS A MAP: every table source is a node (mounts left, each
+  // lens right of what it derives from), solid edges are references between
+  // entities, dashed edges are derivations.  Every node opens its schema page.
+  function openSchemaMap(panel) {
+    const V = viewer(panel, 'Schema map', { type: 'open_schema' });
+    const nodes = [...sources].filter(([, s]) => s.kind === 'table');
+    V.add('div', 'exp:note', null, 0); V.set('exp:note', 'class', 'explorer-note');
+    if (!nodes.length) { V.text('exp:note', 'Nothing mounted yet — the map draws itself as sources land.'); return; }
+    V.text('exp:note', `${nodes.length} sources and lenses · solid lines are references, dashed are derivations · click a node for its schema`);
+    const depth = (n) => chainOf(n).length - 1;
+    const colsBy = new Map();
+    for (const [n] of nodes) { const d = depth(n); (colsBy.get(d) || colsBy.set(d, []).get(d)).push(n); }
+    const NW = 190, NH = 46, GX = 250, GY = 62, PX = 16, PY = 14;
+    const pos = new Map();
+    let maxRows = 0;
+    for (const [d, list] of colsBy) {
+      list.forEach((n, r) => pos.set(n, { x: PX + d * GX, y: PY + r * GY }));
+      maxRows = Math.max(maxRows, list.length);
+    }
+    const W = PX * 2 + (Math.max(...colsBy.keys()) * GX) + NW;
+    const H = PY * 2 + (maxRows - 1) * GY + NH;
+    V.add('svg', 'sm:svg', null, 1); V.set('sm:svg', 'viewBox', `0 0 ${W} ${H}`); V.set('sm:svg', 'class', 'schema-map');
+    let idx = 0;
+    // edges first (under the nodes), deduped per source→target pair
+    const drawn = new Map(); // "a->b" -> label so far
+    const edge = (a, b, label, cls) => {
+      const p = pos.get(a), q = pos.get(b);
+      if (!p || !q) return;
+      const ek = `${a}->${b}`;
+      if (drawn.has(ek)) return;
+      drawn.set(ek, label);
+      const [l, r] = p.x <= q.x ? [p, q] : [q, p];
+      const k = `sm:e${drawn.size}`;
+      V.add('line', k, 'sm:svg', idx++); V.set(k, 'class', cls);
+      V.set(k, 'x1', l.x + NW); V.set(k, 'y1', l.y + NH / 2);
+      V.set(k, 'x2', r.x); V.set(k, 'y2', r.y + NH / 2);
+      if (label) {
+        V.add('text', `${k}:l`, 'sm:svg', idx++); V.set(`${k}:l`, 'class', 'sm-lbl');
+        V.set(`${k}:l`, 'x', (l.x + NW + r.x) / 2); V.set(`${k}:l`, 'y', (l.y + r.y + NH) / 2 - 5);
+        V.text(`${k}:l`, label);
+      }
+    };
+    for (const [n, s] of nodes) if (s.from) edge(s.from, n, '', 'sm-edge derive');
+    for (const [key, m] of fieldMeta) {
+      if (m.role !== 'ref' && m.role !== 'refs') continue;
+      const [src, field] = key.split('|');
+      edge(src, m.ref, field, 'sm-edge');
+    }
+    nodes.forEach(([n, s]) => {
+      const k = `smn:${n}`;
+      const p = pos.get(n);
+      V.add('g', k, 'sm:svg', idx++); V.set(k, 'class', 'sm-node');
+      V.set(k, 'data-name', n); V.set(k, 'data-title', srcTitle(n));
+      V.add('rect', `${k}:r`, k, 0); V.set(`${k}:r`, 'x', p.x); V.set(`${k}:r`, 'y', p.y);
+      V.set(`${k}:r`, 'width', NW); V.set(`${k}:r`, 'height', NH); V.set(`${k}:r`, 'rx', 10);
+      V.add('text', `${k}:t`, k, 1); V.set(`${k}:t`, 'class', 'sm-t');
+      V.set(`${k}:t`, 'x', p.x + 12); V.set(`${k}:t`, 'y', p.y + 19);
+      V.text(`${k}:t`, String(srcTitle(n)).slice(0, 26));
+      V.add('text', `${k}:m`, k, 2); V.set(`${k}:m`, 'class', 'sm-m');
+      V.set(`${k}:m`, 'x', p.x + 12); V.set(`${k}:m`, 'y', p.y + 35);
+      V.text(`${k}:m`, `${fmtInt(s.rowcount)} rows${s.from ? ` · from ${String(srcTitle(s.from)).slice(0, 18)}` : ''}`);
+    });
   }
 
   function chartMessage(label, msg, panel) {
@@ -1776,6 +1911,8 @@ const T = (() => {
       viewer(e.panel, e.title || 'The twin', { type: 'open_board' });
     } else if (e.type === 'search') {
       search(String(e.query || ''), e.panel);
+    } else if (e.type === 'open_schema') {
+      openSchemaMap(e.panel);
     } else if (e.type === 'watch') {
       watch(e.panel);
     } else if (e.type === 'open_finding') {
@@ -1801,7 +1938,7 @@ const T = (() => {
     }
     // 'fetch' renders via the host boundary (twin_fetch); 'open_board' is hosted
     // client-side (the live board node) — both are still captured raw above.
-    if (['open_source', 'open_asset', 'open_document', 'fetch', 'open_board', 'watch'].includes(e.type)) {
+    if (['open_source', 'open_asset', 'open_document', 'fetch', 'open_board', 'watch', 'open_schema'].includes(e.type)) {
       pushRecent(e);
     }
   }
@@ -1847,6 +1984,7 @@ const T = (() => {
       case 'open_asset': return `opened the dashboard of asset ${e.id}`;
       case 'search': return e.query ? `searched for “${e.query}”` : 'cleared the search';
       case 'watch': return 'opened the Watch board';
+      case 'open_schema': return 'opened the schema map';
       case 'fetch': return `charted series ${e.label || e.id}`;
       case 'open_board': return 'opened the twin board';
       case 'open_agent': return 'checked what the agent is doing';

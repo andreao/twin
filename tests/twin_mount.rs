@@ -613,6 +613,30 @@ fn inspect_reads_like_a_person_wrote_it() {
 }
 
 #[test]
+fn schema_renders_as_table_and_map_with_reference_links() {
+    let mut g = JsGraph::new_twin();
+    let a = std::env::temp_dir().join(format!("sch_assets_{}.csv", std::process::id()));
+    std::fs::write(&a, "id,name\n1,Compressor\n2,Pump\n3,Valve\n").unwrap();
+    let t = std::env::temp_dir().join(format!("sch_ts_{}.csv", std::process::id()));
+    std::fs::write(&t, "id,name,assetId\n10,temp,1\n11,vib,2\n12,pres,3\n13,flow,3\n").unwrap();
+    g.twin_read_source("assets", a.to_str().unwrap(), "mounted");
+    g.twin_read_source("timeseries", t.to_str().unwrap(), "mounted");
+    // the schema as a table: one row per field, the reference is a doorway
+    g.twin_event(r#"{"type":"open_source","name":"timeseries","mode":"schema","panel":0}"#);
+    let d = g.twin_from(0);
+    assert!(d.contains("sch:tbl") && d.contains("unique key"), "no schema table: {d}");
+    assert!(d.contains("sch:ref:") && d.contains("references assets.id"), "reference not a doorway: {d}");
+    // the schema as a map: nodes for both sources, an edge labeled by the field
+    g.twin_event(r#"{"type":"open_schema","panel":1}"#);
+    let m = g.twin_from(0);
+    assert!(m.contains("smn:assets") && m.contains("smn:timeseries"), "map nodes missing: {m}");
+    assert!(m.contains("sm-edge") && m.contains(r#""text":"assetId""#), "reference edge missing: {m}");
+    // every table offers the Schema mode
+    g.twin_event(r#"{"type":"open_source","name":"timeseries","panel":0}"#);
+    assert!(g.twin_from(0).contains("mode:timeseries:schema"), "no schema mode button");
+}
+
+#[test]
 fn lens_columns_inherit_upstream_field_semantics() {
     let path = write_temp_csv();
     let mut g = JsGraph::new_twin();

@@ -223,9 +223,27 @@
   .panel-body td, .view-body td { padding: 5px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; max-width: 300px; overflow: hidden; text-overflow: ellipsis; }
   .panel-body tr:hover td, .view-body tr:hover td { background: var(--panel); }
   .explorer-note { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
-  /* the field guide: what the twin understood about each column, one quiet line each */
+  /* the field guide: what the twin understood about each column, one quiet line
+     each — every line opens the source's full Schema view */
   .field-guide { border: 1px solid var(--line); border-radius: 9px; padding: 8px 12px; margin: 0 0 12px; background: var(--panel); }
   .field-line { font-size: 12px; color: var(--muted); line-height: 1.7; }
+  .field-line.linkable { cursor: pointer; }
+  .field-line.linkable:hover { color: var(--accent); }
+  /* the schema as a page: reference cells are doorways to the schema they name */
+  .sch-field { font-family: ui-monospace, "SF Mono", monospace; font-size: 11.5px; }
+  .sch-desc { white-space: normal !important; min-width: 180px; }
+  .sch-ref { color: var(--accent); cursor: pointer; }
+  .sch-ref:hover { text-decoration: underline; }
+  /* the schema as a map: sources and lenses as nodes, references and derivations as edges */
+  .schema-map { width: 100%; height: auto; display: block; }
+  .sm-node { cursor: pointer; }
+  .sm-node rect { fill: var(--panel); stroke: var(--line); stroke-width: 1; }
+  .sm-node:hover rect { stroke: var(--accent); fill: var(--accent-soft); }
+  .sm-t { font-size: 12px; font-weight: 600; fill: var(--ink); }
+  .sm-m { font-size: 10px; fill: var(--muted); }
+  .sm-edge { stroke: var(--muted); stroke-width: 1.2; opacity: .5; }
+  .sm-edge.derive { stroke-dasharray: 4 3; opacity: .35; }
+  .sm-lbl { font-size: 9.5px; fill: var(--muted); }
   .panel-body .chartable { cursor: pointer; }
   .panel-body .chartable:hover td { background: var(--accent-soft); }
   .chart { width: 100%; height: auto; max-height: 66vh; display: block; }
@@ -593,13 +611,19 @@
         send({ type: "resolve_finding", id: Number(el.dataset.id) });
         openFromEv(base, panels[base] ? panels[base].title : "Finding", { type: "open_finding", id: Number(el.dataset.id) });
       });
-      else if (k.startsWith("mode:")) el.addEventListener("click", () => { const [, name, mode] = k.split(":"); openFromEv(base, panels[base] ? panels[base].title : name, { type: "open_source", name, mode }); });
+      // mode keys are mode:<name>:<mode>, where <name> itself may contain ':' (lens:foo)
+      else if (k.startsWith("mode:")) el.addEventListener("click", () => { const parts = k.split(":"); const mode = parts.pop(); const name = parts.slice(1).join(":"); openFromEv(base, panels[base] ? panels[base].title : name, { type: "open_source", name, mode }); });
+      // schema doorways: a reference cell, a field-guide line, or a map node
+      else if (k.startsWith("sch:ref:")) el.addEventListener("click", () => openFromEv(base + 1, el.dataset.title || el.dataset.name, { type: "open_source", name: el.dataset.name, mode: "schema" }));
+      else if (/^exp:fg:\d+$/.test(k)) el.addEventListener("click", () => openFromEv(base, el.dataset.title || el.dataset.name, { type: "open_source", name: el.dataset.name, mode: "schema" }));
+      else if (k.startsWith("smn:")) el.addEventListener("click", () => openFromEv(base + 1, el.dataset.title || k.slice(4), { type: "open_source", name: k.slice(4), mode: "schema" }));
       else if (/^iss:[^:]+:\d+:\d+$/.test(k)) el.addEventListener("click", () => openFromEv(base + 1, "Asset", { type: "open_asset", id: k.split(":")[1] }));
       return;
     }
     // board tiles live in whichever column hosts the board — open into the next one
     const boardIdx = () => panels.findIndex((p) => p.isBoard);
-    if (/^sr:[^:]+$/.test(key)) el.addEventListener("click", () => { const b = boardIdx(); if (b < 0) return; const n = key.slice(3); openFromEv(b + 1, el.dataset.title || n, { type: "open_source", name: n }); });
+    if (key === "tile:schemamap") el.addEventListener("click", () => { const b = boardIdx(); openFromEv(b < 0 ? 0 : b + 1, "Schema map", { type: "open_schema" }); });
+    else if (/^sr:[^:]+$/.test(key)) el.addEventListener("click", () => { const b = boardIdx(); if (b < 0) return; const n = key.slice(3); openFromEv(b + 1, el.dataset.title || n, { type: "open_source", name: n }); });
     else if (/^ln:[^:]+$/.test(key)) el.addEventListener("click", () => { const b = boardIdx(); if (b < 0) return; const n = "lens:" + key.slice(3); openFromEv(b + 1, el.dataset.title || n, { type: "open_source", name: n }); });
     // a view card in the chat opens the same thing in depth (panel 0)
     else if (/^item:\d+:h$/.test(key)) el.addEventListener("click", () => { if (el.dataset.ev) openFromEv(0, el.dataset.title || el.textContent, JSON.parse(el.dataset.ev)); });
