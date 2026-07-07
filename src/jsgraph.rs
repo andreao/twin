@@ -92,9 +92,29 @@ impl JsGraph {
         self.call(&format!("T.agentTool({json:?})"));
     }
 
-    /// The structured projection the agent perceives (§12.3), as JSON.
+    /// The structured projection the agent perceives (§12.3), as JSON — augmented
+    /// at the host seam with one boundary fact (§9.9): what data sits on disk that
+    /// is NOT yet mounted, so a fresh pull never waits for a human to name it.
     pub fn twin_perceive(&mut self) -> String {
-        self.call("T.perceive()")
+        let raw = self.call("T.perceive()");
+        let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            return raw;
+        };
+        let mounted: Vec<String> = v["sources"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|s| s["locator"].as_str())
+                    .filter(|l| !l.is_empty())
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let offers = crate::source::scan_available("data", &mounted);
+        if !offers.is_empty() {
+            v["unmounted"] = serde_json::Value::Array(offers);
+        }
+        v.to_string()
     }
 
     /// A generic boundary fetch (§9.9): invoke a named host capability by `(adapter, id)`

@@ -2040,7 +2040,7 @@ const T = (() => {
       const fl = fieldLines(name);
       return {
         name, title: s.title, description: s.description,
-        residence: s.residence, rowcount: s.rowcount,
+        residence: s.residence, rowcount: s.rowcount, locator: s.locator || '',
         fields: fl.length ? fl : Object.keys(s.schema || {}),
         sample: (s.sample || []).slice(0, 2),
       };

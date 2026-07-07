@@ -131,3 +131,11 @@
 {"k":"tool","p":"{\"tool\":\"think\",\"args\":{\"text\":\"Annotating the 'spud_date' field in the Engineering export to provide clear semantics.\"}}"}
 {"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"source\":\"export\",\"field\":\"spud_date\",\"title\":\"Spud Date\",\"description\":\"The date when the drilling operation officially began.\"}}"}
 {"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"description\":\"The unique identifier for the well in the engineering database.\",\"field\":\"well_id\",\"source\":\"export\",\"title\":\"Well ID\"}}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"field\":\"water_depth\",\"source\":\"export\",\"title\":\"Water Depth\",\"description\":\"The vertical distance from the water surface to the seabed.\"}}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"field\":\"well_legal_name\",\"source\":\"export\",\"title\":\"Well Legal Name\",\"description\":\"The official legal designation for the well in regulatory and corporate records.\"}}"}
+{"k":"ev","p":"{\"name\":\"wellpicks\",\"panel\":0,\"title\":\"Formation picks\",\"ts\":1783448059476,\"type\":\"open_source\"}"}
+{"k":"ev","p":"{\"panel\":0,\"title\":\"The twin\",\"ts\":1783448061486,\"type\":\"open_board\"}"}
+{"k":"ev","p":"{\"panel\":0,\"title\":\"What’s happening\",\"ts\":1783448090455,\"type\":\"open_agent\"}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"source\":\"export\",\"field\":\"wellbore_id\",\"title\":\"Wellbore ID\",\"description\":\"The unique identifier for a wellbore in the engineering database.\"}}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"field\":\"wellbore_name\",\"source\":\"export\",\"title\":\"Wellbore Name\",\"description\":\"The descriptive name of the wellbore as recorded in the engineering database.\"}}"}
+{"k":"tool","p":"{\"tool\":\"think\",\"args\":{\"text\":\"Annotating 'Hole Size' in the engineering export to define its role as the borehole diameter for planning.\"}}"}

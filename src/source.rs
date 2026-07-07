@@ -46,10 +46,20 @@ pub fn read_file(path: &str) -> Result<Vec<Value>, String> {
 /// lineage hook).  This is how a real corpus mounts — a WITSML tree is hundreds of
 /// small files per well — and the extraction lenses then carve it by `kind`.
 /// Bounded: a directory is a view, not an ingest (§15.1); the files stay put.
+/// What counts as a mountable data file, for directory mounts and the
+/// available-data scan alike.
+const DATA_EXT: [&str; 8] = ["xml", "las", "csv", "tsv", "json", "jsonl", "ndjson", "xlsx"];
+
+fn is_data_file(p: &std::path::Path) -> bool {
+    p.extension()
+        .and_then(|x| x.to_str())
+        .map(|x| DATA_EXT.contains(&x.to_ascii_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
 fn read_dir_rows(root: &str) -> Result<Vec<Value>, String> {
     const MAX_FILES: usize = 500;
     const MAX_ROWS: usize = 20_000;
-    const DATA_EXT: [&str; 8] = ["xml", "las", "csv", "tsv", "json", "jsonl", "ndjson", "xlsx"];
     let mut files = Vec::new();
     let mut stack = vec![std::path::PathBuf::from(root)];
     while let Some(d) = stack.pop() {
@@ -58,12 +68,7 @@ fn read_dir_rows(root: &str) -> Result<Vec<Value>, String> {
             let p = e.path();
             if p.is_dir() {
                 stack.push(p);
-            } else if p
-                .extension()
-                .and_then(|x| x.to_str())
-                .map(|x| DATA_EXT.contains(&x.to_ascii_lowercase().as_str()))
-                .unwrap_or(false)
-            {
+            } else if is_data_file(&p) {
                 files.push(p);
             }
         }
@@ -106,6 +111,98 @@ fn read_dir_rows(root: &str) -> Result<Vec<Value>, String> {
         ));
     }
     Ok(rows)
+}
+
+/// Scan a data root for mountable things the twin does NOT yet have — the
+/// boundary fact behind the agent's "unmounted" perception, so pulled data never
+/// sits invisible on disk waiting for a human to name it.  Deterministic and
+/// bounded; offers the shallowest useful mount roots:
+///   - a directory with data files directly in it (a datapoints/ of CSVs);
+///   - at the depth cap, a subtree that holds data further down (one well's
+///     WITSML tree) — the granularity a whole-directory mount wants;
+///   - a loose data file.
+/// Paths already mounted (or inside a mounted directory) are skipped, as are the
+/// twin's own stores (models, projects, docs, journals).
+pub fn scan_available(root: &str, mounted: &[String]) -> Vec<Value> {
+    const MAX_OFFERS: usize = 12;
+    const DEPTH_CAP: usize = 5;
+    let skip = ["models", "projects", "docs"];
+    let is_mounted = |p: &str| {
+        mounted.iter().any(|m| {
+            let m = m.trim_end_matches('/');
+            !m.is_empty() && (p == m || p.starts_with(&format!("{m}/")))
+        })
+    };
+    let mut offers = Vec::new();
+    // (dir, depth); depth-first so offers group naturally by subtree
+    let mut stack = vec![(std::path::PathBuf::from(root), 1usize)];
+    while let Some((dir, depth)) = stack.pop() {
+        if offers.len() >= MAX_OFFERS {
+            break;
+        }
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        let mut subdirs = Vec::new();
+        let mut direct = 0usize;
+        for e in rd.flatten() {
+            let p = e.path();
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') || (depth == 1 && skip.contains(&name.as_str())) {
+                continue;
+            }
+            if p.is_dir() {
+                subdirs.push(p);
+            } else if is_data_file(&p) && depth > 1 {
+                // depth 1 is the data root itself — its loose files are the
+                // twin's own (journal, manifest), never an offer
+                direct += 1;
+            }
+        }
+        let path = dir.to_string_lossy().into_owned();
+        if is_mounted(&path) {
+            continue;
+        }
+        if direct > 0 {
+            // this directory mounts as one source
+            offers.push(offer(&path, count_data(&dir, 2000)));
+        } else if depth >= DEPTH_CAP {
+            let n = count_data(&dir, 2000);
+            if n > 0 {
+                offers.push(offer(&path, n));
+            }
+        } else {
+            subdirs.sort();
+            for s in subdirs.into_iter().rev() {
+                stack.push((s, depth + 1));
+            }
+        }
+    }
+    offers.truncate(MAX_OFFERS);
+    offers
+}
+
+fn offer(path: &str, files: usize) -> Value {
+    serde_json::json!({ "path": path, "files": files })
+}
+
+/// Recursive data-file count, capped so a huge tree costs a bounded walk.
+fn count_data(dir: &std::path::Path, cap: usize) -> usize {
+    let mut n = 0;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if is_data_file(&p) {
+                n += 1;
+                if n >= cap {
+                    return n;
+                }
+            }
+        }
+    }
+    n
 }
 
 /// Parse a fixed-width table (well picks, survey listings): column boundaries are
@@ -356,5 +453,43 @@ mod tests {
         } else {
             parse_csv(text, ',')
         }
+    }
+
+    #[test]
+    fn scan_offers_the_right_mount_roots() {
+        let root = std::env::temp_dir().join(format!("twin_scan_{}", std::process::id()));
+        let mk = |p: &str| std::fs::create_dir_all(root.join(p)).unwrap();
+        let put = |p: &str| std::fs::write(root.join(p), "a,b\n1,2\n").unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        mk("a/points");
+        put("a/points/1.csv");
+        put("a/points/2.csv");
+        mk("b/deep/nest/well1/traj");
+        put("b/deep/nest/well1/traj/1.xml");
+        mk("b/deep/nest/well2/traj");
+        put("b/deep/nest/well2/traj/1.xml");
+        mk("models"); // the twin's own store — never offered
+        put("models/cache.json");
+        put("journal.jsonl"); // loose root files are the twin's own
+        let r = root.to_string_lossy().into_owned();
+
+        let offers = scan_available(&r, &[]);
+        let paths: Vec<&str> = offers.iter().filter_map(|o| o["path"].as_str()).collect();
+        assert!(paths.iter().any(|p| p.ends_with("a/points")), "csv dir offered: {paths:?}");
+        assert!(
+            paths.iter().any(|p| p.ends_with("nest/well1")) && paths.iter().any(|p| p.ends_with("nest/well2")),
+            "deep trees offer per-subtree at the cap: {paths:?}"
+        );
+        assert!(!paths.iter().any(|p| p.contains("models")), "own stores excluded: {paths:?}");
+        assert!(!paths.iter().any(|p| p.ends_with("journal.jsonl")), "root files excluded");
+
+        // mounting a root hides it (and everything under it) from the next scan
+        let mounted = vec![format!("{r}/a/points"), format!("{r}/b/deep/nest/well1")];
+        let after = scan_available(&r, &mounted);
+        let paths2: Vec<&str> = after.iter().filter_map(|o| o["path"].as_str()).collect();
+        assert!(!paths2.iter().any(|p| p.ends_with("a/points")), "mounted dir still offered: {paths2:?}");
+        assert!(!paths2.iter().any(|p| p.ends_with("well1")), "mounted subtree still offered");
+        assert!(paths2.iter().any(|p| p.ends_with("well2")), "unmounted sibling must remain");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

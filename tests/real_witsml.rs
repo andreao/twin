@@ -43,6 +43,19 @@ fn every_real_witsml_file_parses() {
 }
 
 #[test]
+fn pulled_data_appears_in_perception_unmounted() {
+    // the point of the scan: a fresh pull is VISIBLE to the agent, and mounting
+    // it makes the offer disappear — no human message required in between
+    let mut g = twin_runtime::JsGraph::new_twin();
+    let seen = g.twin_perceive();
+    assert!(seen.contains("\"unmounted\""), "no unmounted section: {seen}");
+    assert!(seen.contains("data/volve/witsml"), "sample witsml dir not offered: {seen}");
+    g.twin_read_source("witsml-samples", "data/volve/witsml", "mounted");
+    let seen2 = g.twin_perceive();
+    assert!(!seen2.contains("\"path\":\"data/volve/witsml\""), "mounted dir still offered: {seen2}");
+}
+
+#[test]
 fn a_whole_well_mounts_as_one_source() {
     let well = format!("{ROOT}/Norway-Statoil-NO 15_$47$_9-F-4");
     if !std::path::Path::new(&well).exists() {
