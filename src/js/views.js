@@ -234,7 +234,7 @@ class FindingsPanel {
     this._emit({ op: 'setAttr', key: 'tile:findings:b', name: 'class', value: 'fnd-list' });
   }
 
-  set(id, severity, text, source, status) {
+  set(id, severity, text, source, status, kind) {
     this._tile();
     const rk = `fnd:${id}`;
     const cls = `fnd sev-${severity}${status === 'resolved' ? ' resolved' : ''}`;
@@ -253,7 +253,8 @@ class FindingsPanel {
     this._emit({ op: 'setText', key: `${rk}:t`, text });
     this._emit({ op: 'create', key: `${rk}:m`, tag: 'div', parent: rk, index: 1 });
     this._emit({ op: 'setAttr', key: `${rk}:m`, name: 'class', value: 'fnd-m' });
-    this._emit({ op: 'setText', key: `${rk}:m`, text: source ? `${severity} · in ${source} · found by the agent` : `${severity} · found by the agent` });
+    const by = kind === 'schema' ? 'noticed by the twin' : 'found by the agent';
+    this._emit({ op: 'setText', key: `${rk}:m`, text: source ? `${severity} · in ${source} · ${by}` : `${severity} · ${by}` });
   }
 
   _count() {

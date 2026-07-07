@@ -116,13 +116,10 @@
      (status chip + actions), then the work as a transcript with a live edge */
   .task-title { font-size: 17px; font-weight: 650; line-height: 1.45; max-width: 58ch; }
   .task-now { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12.5px; margin-top: 8px; }
-  .agent-now { margin: 0 0 4px; font-size: 13px; color: var(--ink); }
   .now-dot.live { background: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
-  /* the idle now-line carries no dot — a dead bullet reads as clutter; while the
-     agent is actually computing, the client overlays a live line (see .thinking) */
-  .agent-now .now-dot:not(.live) { display: none; }
-  .agent-now.thinking .now-dot { display: block; background: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
-  .agent-now.thinking > span:not(.now-dot):not(.now-live) { display: none; }
+  /* the active plan row IS the live surface: a pulsing dot on its label, and its
+     latest work note (.agent-live) as the row's own quiet line — no now-strip */
+  .act-row.is-now .act-verb::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse 1.1s ease-in-out infinite; margin-right: 6px; vertical-align: baseline; }
   .task-head { margin-top: 14px; align-items: center; }
   .task-head .fd-sev { margin-bottom: 0; }
   /* the task transcript IS the chat, verbatim: it reuses .feed-item text and
@@ -351,16 +348,16 @@
       // between turns: "waiting" while there's open work; "idle" only when there's none
       statusLine.textContent = (plan || doing) ? `waiting · ${plan || "on: " + doing}` : "idle";
     }
-    // any open What's-happening page mirrors this live: while the agent is
-    // computing, its now-line pulses and says so instead of a stale "last:" line.
-    document.querySelectorAll(".agent-now").forEach((el) => {
-      el.classList.toggle("thinking", statusOn);
-      let live = el.querySelector(".now-live");
-      if (!statusOn) { if (live) live.remove(); return; }
-      if (!live) { live = document.createElement("span"); live.className = "now-live"; el.appendChild(live); }
-      live.textContent = statusBg
-        ? ((doing ? "working on: " + doing : "doing background work") + (act ? " · " + act : ""))
-        : ("thinking about your message…" + (act ? " · " + act : ""));
+    // the active plan row's live line mirrors this: while the agent is actually
+    // computing, it reads as such (the server text is restored afterwards).
+    document.querySelectorAll(".agent-live").forEach((el) => {
+      if (statusOn) {
+        if (el.dataset.srv == null) el.dataset.srv = el.textContent;
+        el.textContent = statusBg ? (act || doing || "working…") : "thinking about your message…";
+      } else if (el.dataset.srv != null) {
+        el.textContent = el.dataset.srv;
+        delete el.dataset.srv;
+      }
     });
   }
 
@@ -589,6 +586,8 @@
         openFromEv(base, panels[base] ? panels[base].title : "Task", { type: "open_task", id: Number(el.dataset.id) });
       });
       else if (k === "fd:investigate") el.addEventListener("click", () => send({ type: "user_message", text: `Investigate this finding and show me the evidence: “${el.dataset.text}”` }));
+      // schema gaps have one fix: documentation — both buttons brief the agent the same way
+      else if (k === "fd:document" || k === "exp:annbtn") el.addEventListener("click", () => send({ type: "user_message", text: `Document the fields of ${el.dataset.title}: annotate every field that still lacks a title with a short human title and a one-sentence meaning. If a field's meaning cannot be read from the data, ask me.` }));
       else if (k === "fd:fix") el.addEventListener("click", () => send({ type: "user_message", text: `Propose a concrete fix for this finding: “${el.dataset.text}”` }));
       else if (k === "fd:resolve") el.addEventListener("click", () => {
         send({ type: "resolve_finding", id: Number(el.dataset.id) });

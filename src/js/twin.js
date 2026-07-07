@@ -122,8 +122,8 @@ const T = (() => {
     for (const [row] of delta.entries()) {
       const r = row.asObject();
       const status = r.status || 'open';
-      findings.set(r.id, { severity: r.severity, text: r.text, source: r.source, status });
-      findingsPanel.set(r.id, r.severity, r.text, r.source, status);
+      findings.set(r.id, { severity: r.severity, text: r.text, source: r.source, status, kind: r.kind || '' });
+      findingsPanel.set(r.id, r.severity, r.text, r.source, status, r.kind || '');
     }
   });
   const srcTitle = (n) => (sources.get(n) || {}).title || n;
@@ -370,34 +370,79 @@ const T = (() => {
     }
   }
 
+  // Semantics FLOW with the data (§8 lineage): a lens's column means what it
+  // meant upstream.  Statistics stay local — every derivation is re-profiled —
+  // but a field's human title and description inherit along the from-chain
+  // until someone annotates the derived field itself.
+  function semanticsOf(name, field) {
+    let cur = name, guard = 0;
+    while (cur && guard++ < 12) {
+      const m = fieldMeta.get(`${cur}|${field}`);
+      if (m && (m.title || m.description)) return m;
+      cur = (sources.get(cur) || {}).from;
+    }
+    return null;
+  }
   // The profile of one source as compact human lines — what the agent perceives
   // instead of guessing from sample rows, and what the field guide renders.
   function fieldLines(name) {
     const cols = Object.keys((sources.get(name) || {}).schema || {});
     const out = [];
     for (const c of cols) {
-      const m = fieldMeta.get(`${name}|${c}`);
-      if (!m) continue;
+      const m = fieldMeta.get(`${name}|${c}`) || {};
+      const sem = semanticsOf(name, c) || {};
       const bits = [];
-      if (m.title) bits.push(`“${m.title}”`);
+      if (sem.title) bits.push(`“${sem.title}”`);
       if (m.type && m.type !== 'empty') bits.push(m.type);
       if (m.role === 'key') bits.push('unique key');
-      else if (m.role === 'ref') bits.push(`references ${m.ref}.${m.refField}`);
-      else if (m.role === 'refs') bits.push(`multi-references ${m.ref}.${m.refField} (';'-joined)`);
+      else if (m.role === 'ref') bits.push(`references ${srcTitle(m.ref)}.${m.refField}`);
+      else if (m.role === 'refs') bits.push(`multi-references ${srcTitle(m.ref)}.${m.refField} (';'-joined)`);
       else if (m.role === 'enum') bits.push(`one of: ${m.values}`);
       else if (m.role === 'constant') bits.push(`always “${m.values}”`);
       else if (m.role === 'redundant') bits.push(m.overlap ? `duplicates ${m.refField} on ${m.overlap}% of rows` : `duplicates ${m.refField}`);
       if (m.pattern) bits.push(`pattern ${m.pattern} (${m.coverage}% of rows)`);
       if (m.empty) bits.push(m.empty >= 100 ? 'always empty' : `${m.empty}% empty`);
-      if (m.description) bits.push(m.description);
+      if (sem.description) bits.push(sem.description);
+      if (!bits.length) continue;
       out.push(`${c}: ${bits.join(' · ')}`);
     }
     return out;
   }
   const fieldTitle = (src, c) => {
-    const m = fieldMeta.get(`${src}|${c}`);
+    const m = semanticsOf(src, c);
     return (m && m.title) || c;
   };
+
+  // The twin watching its own understanding: a mounted source whose fields lack
+  // documented meaning IS a data issue — filed as a finding the moment the source
+  // lands (deterministic, model-free), updated as annotations arrive, and resolved
+  // by itself when the last gap closes.  Ids are stable hashes of the source name,
+  // never findingSeq, so replayed agent findings keep their ids across boots.
+  const schemaFindings = new Map(); // source name -> finding id
+  function schemaGapCheck(name) {
+    const meta = sources.get(name);
+    if (!meta || meta.kind !== 'table' || String(name).startsWith('lens:')) return;
+    const cols = Object.keys(meta.schema || {});
+    if (!cols.length) return;
+    const missing = cols.filter((c) => !((fieldMeta.get(`${name}|${c}`) || {}).title));
+    let id = schemaFindings.get(name);
+    if (id == null) {
+      let h = 0;
+      for (const ch of String(name)) h = (h * 31 + ch.charCodeAt(0)) % 100000;
+      id = 900000 + h;
+      schemaFindings.set(name, id);
+    }
+    const prev = findings.get(id);
+    if (missing.length) {
+      const list = missing.slice(0, 6).join(', ') + (missing.length > 6 ? ` +${missing.length - 6} more` : '');
+      const text = `${srcTitle(name)}: ${missing.length} of ${cols.length} fields have no documented meaning (${list})`;
+      if (prev && prev.text === text && prev.status !== 'resolved') return;
+      G.submit(findingsSrc, ZSet.fromRows([rec({ id, severity: 'info', text, source: name, kind: 'schema', status: 'open' })]), prov('twin'));
+    } else if (prev && prev.status !== 'resolved') {
+      G.submit(findingsSrc, ZSet.fromRows([rec({ id, severity: 'info', text: prev.text, source: name, kind: 'schema', status: 'resolved' })]), prov('twin'));
+      logStep('finished', `documented every field of ${srcTitle(name)}`, { subject: `schema:${name}`, ev: { type: 'open_source', name } });
+    }
+  }
 
   // The agent's `annotate` tool — the SEMANTIC pass: what a field means, in words
   // the profiler cannot know.  An agent claim on the same stream, so it overrides
@@ -421,6 +466,7 @@ const T = (() => {
     }
     claim(src, field, facts, 'agent');
     logStep('described', `${srcTitle(src)} · ${field}`, { subject: `schema:${src}.${field}`, ev: { type: 'open_source', name: src } });
+    schemaGapCheck(src); // one field closer — the schema-gap finding follows along
   }
 
   // Called from the Rust boundary once a file has been read (mount = federate, §9.9).
@@ -451,6 +497,7 @@ const T = (() => {
     sources.set(name, info);
     sourcesPanel.set(name, info);
     profileSource(name); // first-pass schema inference, the moment the data lands
+    schemaGapCheck(name); // an undocumented schema is an ISSUE, on the board from birth
     info.cardSeq = workCard(`Mounted ${info.title}`, info.description, mountMeta(info), { type: 'open_source', name });
   }
 
@@ -620,13 +667,18 @@ const T = (() => {
     noteBits.push(`${cols.length} columns`, `showing ${fmtInt(rows.length)} of ${fmtInt(s.rowcount)} rows`);
     if (chartable) noteBits.push('click a sensor to chart it');
     V.text('exp:note', noteBits.join(' · '));
+    // an undocumented table offers its own way out, right where you notice it
+    if (!s.code && cols.some((c) => !((fieldMeta.get(`${name}|${c}`) || {}).title))) {
+      V.add('button', 'exp:annbtn', null, i++); V.set('exp:annbtn', 'class', 'steps-toggle');
+      V.set('exp:annbtn', 'data-title', srcTitle(name)); V.text('exp:annbtn', 'document the fields');
+    }
     // the field guide: what the twin has understood about each column — inferred
     // structure (keys, references, enums, patterns) and the agent's annotations.
     const lines = fieldLines(name);
     const guide = cols
       .filter((c) => {
-        const m = fieldMeta.get(`${name}|${c}`);
-        return m && (m.title || m.description || m.role || m.pattern);
+        const m = fieldMeta.get(`${name}|${c}`) || {};
+        return semanticsOf(name, c) || m.role || m.pattern;
       })
       .map((c) => lines.find((l) => l.startsWith(`${c}:`)) || c);
     if (guide.length) {
@@ -646,8 +698,8 @@ const T = (() => {
     cols.forEach((c, ci) => {
       V.add('th', `exp:th:${ci}`, 'exp:htr', ci);
       V.text(`exp:th:${ci}`, fieldTitle(name, c));
-      const m = fieldMeta.get(`${name}|${c}`);
-      if (m && (m.title || m.description)) V.set(`exp:th:${ci}`, 'title', m.title ? `${c}${m.description ? ' · ' + m.description : ''}` : m.description);
+      const sem = semanticsOf(name, c);
+      if (sem) V.set(`exp:th:${ci}`, 'title', sem.title ? `${c}${sem.description ? ' · ' + sem.description : ''}` : sem.description);
     });
     V.add('tbody', 'exp:tb', 'exp:tbl', 1);
     rows.forEach((row, ri) => {
@@ -1009,10 +1061,16 @@ const T = (() => {
       V.text('fd:src', `in ${srcTitle(f.source)}`);
     }
     V.add('div', 'fd:cta', null, i++); V.set('fd:cta', 'class', 'fd-cta');
-    V.add('button', 'fd:investigate', 'fd:cta', 0); V.set('fd:investigate', 'class', 'fd-btn primary');
-    V.set('fd:investigate', 'data-text', f.text); V.text('fd:investigate', 'Investigate');
-    V.add('button', 'fd:fix', 'fd:cta', 1); V.set('fd:fix', 'class', 'fd-btn');
-    V.set('fd:fix', 'data-text', f.text); V.text('fd:fix', 'Propose a fix');
+    if (f.kind === 'schema') {
+      // the fix for a schema gap is documentation — one button briefs the agent
+      V.add('button', 'fd:document', 'fd:cta', 0); V.set('fd:document', 'class', 'fd-btn primary');
+      V.set('fd:document', 'data-title', srcTitle(f.source)); V.text('fd:document', 'Document the fields');
+    } else {
+      V.add('button', 'fd:investigate', 'fd:cta', 0); V.set('fd:investigate', 'class', 'fd-btn primary');
+      V.set('fd:investigate', 'data-text', f.text); V.text('fd:investigate', 'Investigate');
+      V.add('button', 'fd:fix', 'fd:cta', 1); V.set('fd:fix', 'class', 'fd-btn');
+      V.set('fd:fix', 'data-text', f.text); V.text('fd:fix', 'Propose a fix');
+    }
     V.add('button', 'fd:resolve', 'fd:cta', 2); V.set('fd:resolve', 'class', 'fd-btn');
     V.set('fd:resolve', 'data-id', id);
     V.text('fd:resolve', f.status === 'resolved' ? 'Resolved ✓' : 'Mark resolved');
@@ -1114,11 +1172,12 @@ const T = (() => {
     const match = (w, v) => w === v || (w.length > 3 && v.length > 3 && (w.startsWith(v) || v.startsWith(w)));
     return b.filter((v) => a.some((w) => match(w, v))).length / b.length >= 0.8;
   }
-  // What a task's page shows: its own steps, minus housekeeping and minus notes
-  // that just restate the task's title.
+  // What a task's page shows: its own steps, minus notes that just restate the
+  // task's title.  ('described' steps stay — schema work is real work, and the
+  // machine log is where it shows.)
   function storyOf(tid, taskText) {
     return foldSteps((taskSteps.get(tid) || []).filter((e) =>
-      e.kind !== 'described' && !(e.kind === 'note' && restatesTitle(e.text, taskText))));
+      !(e.kind === 'note' && restatesTitle(e.text, taskText))));
   }
 
   // A STEP, opened: the one place with everything about it — what kind of step,
@@ -1162,37 +1221,23 @@ const T = (() => {
     }
   }
 
-  // What is the agent doing RIGHT NOW — one line for the top of the agent page,
-  // kept live by the agenda and activity folds.
-  function agentNow() {
-    let act = null;
-    for (const a of agenda.values()) if (a.status === 'active') { act = a; break; }
-    if (act) {
-      const n = [...activityTail].reverse().find((x) => x.kind === 'note' && (!activeTaskId || x.task === activeTaskId));
-      return { live: true, text: `${act.text}${n ? ' · ' + n.text : ''}` };
-    }
-    const last = activityTail[activityTail.length - 1];
-    return { live: false, text: last ? `last: ${stepLine(last)}` : 'nothing running right now' };
-  }
+  // The live line lives INSIDE the active plan row (no separate now-strip): the
+  // latest note under the active task, kept current by the activity fold.
   function updateAgentNow() {
-    const s = agentNow();
-    for (const p of agentPanels) {
-      TWIN_MUT.push({ op: 'setText', key: `p${p}:ag:now:t`, text: s.text });
-      TWIN_MUT.push({ op: 'setAttr', key: `p${p}:ag:now:dot`, name: 'class', value: 'now-dot' + (s.live ? ' live' : '') });
-    }
+    if (!agentPanels.size || !activeTaskId) return;
+    const n = [...activityTail].reverse().find((x) => x.kind === 'note' && x.task === activeTaskId);
+    if (!n) return;
+    for (const p of agentPanels) TWIN_MUT.push({ op: 'setText', key: `p${p}:ag:live`, text: n.text });
   }
 
-  // What's happening — what it's doing NOW (live), the plan, and the recent steps.
-  // Every task row opens the task's page; every step row opens the step's page.
+  // What's happening — the plan (the active item pulses and carries its live
+  // note) and the recent steps.  Every task row opens the task's page; every
+  // step row opens the step's page.
   function openAgentPage(panel) {
     const V = viewer(panel, 'What’s happening', { type: 'open_agent' });
     agentPanels.add(V.panel);
-    const s = agentNow();
-    V.add('div', 'ag:now', null, 0); V.set('ag:now', 'class', 'task-now agent-now');
-    V.add('span', 'ag:now:dot', 'ag:now', 0); V.set('ag:now:dot', 'class', 'now-dot' + (s.live ? ' live' : ''));
-    V.add('span', 'ag:now:t', 'ag:now', 1); V.text('ag:now:t', s.text);
-    V.add('div', 'ag:l1', null, 1); V.set('ag:l1', 'class', 'ad-section'); V.text('ag:l1', 'Plan');
-    V.add('div', 'ag:list', null, 2); V.set('ag:list', 'class', 'agent-block');
+    V.add('div', 'ag:l1', null, 0); V.set('ag:l1', 'class', 'ad-section'); V.text('ag:l1', 'Plan');
+    V.add('div', 'ag:list', null, 1); V.set('ag:list', 'class', 'agent-block');
     const items = [...agenda].sort((x, y) => {
       const rank = (st) => (st === 'active' ? 0 : st === 'open' ? 1 : 2);
       return rank(x[1].status) - rank(y[1].status);
@@ -1205,12 +1250,18 @@ const T = (() => {
       const label = a.status === 'active' ? 'now' : a.status === 'done' ? 'done' : (queued++ ? 'later' : 'next');
       workRow(V, 'ag:list', `task:${id}`, i++, label,
         a.text, a.status === 'active' ? 'is-now' : a.status === 'done' ? 'is-done' : '', true, a.desc);
+      if (a.status === 'active') {
+        // what it's doing right now, as the active row's own quiet line
+        V.add('div', 'ag:live', `task:${id}:c`, 2); V.set('ag:live', 'class', 'act-detail agent-live');
+        const n = [...activityTail].reverse().find((x) => x.kind === 'note' && x.task === id);
+        V.text('ag:live', n ? n.text : 'working on it…');
+      }
     }
-    V.add('div', 'ag:l2', null, 3); V.set('ag:l2', 'class', 'ad-section'); V.text('ag:l2', 'Recent steps');
-    V.add('div', 'ag:acts', null, 4); V.set('ag:acts', 'class', 'agent-block');
+    V.add('div', 'ag:l2', null, 2); V.set('ag:l2', 'class', 'ad-section'); V.text('ag:l2', 'Recent steps');
+    V.add('div', 'ag:acts', null, 3); V.set('ag:acts', 'class', 'agent-block');
     // fold first (chronological), then newest on top — this is a recency feed.
-    // Issues are not steps: they live on the Findings board and in Results.
-    const recent = foldSteps(activityTail.filter((e) => e.kind !== 'described' && e.kind !== 'flagged')).slice(-30).reverse();
+    // Issues are not steps: they live on the Findings board and in the telling.
+    const recent = foldSteps(activityTail.filter((e) => e.kind !== 'flagged')).slice(-30).reverse();
     if (!recent.length) { V.add('div', 'ag:qn', 'ag:acts', 0); V.set('ag:qn', 'class', 'ad-empty'); V.text('ag:qn', 'quiet so far'); }
     stepRows(V, 'ag:acts', 'ag:act', recent);
   }

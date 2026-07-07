@@ -613,6 +613,45 @@ fn inspect_reads_like_a_person_wrote_it() {
 }
 
 #[test]
+fn lens_columns_inherit_upstream_field_semantics() {
+    let path = write_temp_csv();
+    let mut g = JsGraph::new_twin();
+    g.twin_read_source("turbines", &path, "mounted");
+    g.twin_agent_tool(r#"{"tool":"annotate","args":{"source":"turbines","field":"gearbox_temp","title":"Gearbox temperature","description":"Degrees C at the gearbox bearing."}}"#);
+    g.twin_agent_tool(r#"{"tool":"make_lens","args":{"name":"Hot gearboxes","description":"Above 70.","source":"turbines","code":"return rows.filter(r => Number(r.gearbox_temp) > 70)"}}"#);
+    // the derived table's column header carries the upstream human title —
+    // semantics flow along the from-chain, statistics stay per-derivation
+    g.twin_event(r#"{"type":"open_source","name":"lens:hot-gearboxes","panel":0}"#);
+    let t = g.twin_from(0);
+    assert!(t.contains("Gearbox temperature"), "lens column did not inherit the upstream title: {t}");
+    assert!(t.contains("Degrees C at the gearbox bearing."), "lens field guide did not inherit the description: {t}");
+}
+
+#[test]
+fn undocumented_schema_is_a_finding_that_resolves_itself() {
+    let path = write_temp_csv();
+    let mut g = JsGraph::new_twin();
+    g.twin_read_source("turbines", &path, "mounted");
+    // the gap is an ISSUE from the moment the source lands — no model involved
+    let muts = g.twin_from(0);
+    assert!(muts.contains("4 of 4 fields have no documented meaning"), "no schema-gap finding: {muts}");
+    assert!(muts.contains("noticed by the twin"), "schema finding misattributed: {muts}");
+    // its page offers documentation as the fix (id = 900000 + hash of the name)
+    g.twin_event(r#"{"type":"open_finding","id":932836,"panel":0}"#);
+    let all = g.twin_from(0);
+    assert!(all.contains("fd:document") && all.contains("Document the fields"), "no document CTA: {all}");
+    // annotating every field resolves the finding by itself
+    for f in ["turbine_id", "site", "gearbox_temp", "vibration"] {
+        g.twin_agent_tool(&format!(
+            r#"{{"tool":"annotate","args":{{"source":"turbines","field":"{f}","title":"T","description":"d"}}}}"#
+        ));
+    }
+    let after = g.twin_from(0);
+    assert!(after.contains("documented every field of turbines"), "no finished step: {after}");
+    assert!(after.contains(r#""value":"fnd sev-info resolved""#), "schema finding did not resolve: {after}");
+}
+
+#[test]
 fn agent_lens_references_resolve_by_title() {
     let path = write_temp_csv();
     let mut g = JsGraph::new_twin();
