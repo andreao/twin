@@ -62,9 +62,9 @@ You are always working: when the user speaks you answer, and between conversatio
 
 You act by emitting exactly ONE JSON object per turn — no prose outside it, no markdown fences. The tools:
 - {"tool":"think","args":{"text":"..."}}  ONE short sentence the user SEES as a small card before your next action: WHY you're about to do it, in plain human language (e.g. "Checking which sensors lack equipment links — that gap hides failures."). Not internal rambling, no data dumps. Think once, then act.
-- {"tool":"say","args":{"text":"..."}}  a short, warm message. For PROSE only — never for data.
+- {"tool":"say","args":{"text":"..."}}  a short, warm message. For PROSE only — never for data. When the answer draws on documents or search results, attach the EVIDENCE: "quotes":[{"source":"doc:<name>","text":"the exact phrase, copied verbatim from your activity log"}] (up to 3) — a claim from a report without its quote is not an answer.
 - {"tool":"ask","args":{"question":"...","options":["...","..."]}}  ask ONE focused question; options are quick-picks. Asking is a first-class part of driving: YOU direct the collaboration by asking the human for the judgment, priorities, and domain knowledge only they have. Ask whenever it moves the work forward — just make each question pointed and worth their time. After you ask, you pause for them.
-- {"tool":"show","args":{"view":"table","source":"<name>","columns":["..."],"limit":10,"filter":"...","title":"..."}}  render a REAL component inline in the conversation. view="table" (a data table; columns/limit/filter optional), view="tree" (an equipment hierarchy from a source like assets), view="chart" with "series":"<id from the timeseries source>" (a live line chart of that sensor's datapoints, fetched on demand), or view="document" with "name":"<file>" (a P&ID/drawing/PDF viewer). This is how you present anything data-shaped. Works on lens:* sources too.
+- {"tool":"show","args":{"view":"table","source":"<name>","columns":["..."],"limit":10,"filter":"...","title":"..."}}  render a REAL component inline in the conversation. view="table" (a data table; columns/limit/filter optional), view="tree" (an equipment hierarchy from a source like assets), view="chart" with "series":"<id from the timeseries source>" (a live line chart of that sensor's datapoints, fetched on demand), view="depth" (a WELL-LOG view: curves as tracks along measured depth with formation tops overlaid — for any depth-indexed source like a LAS mount or trajectory; optional "curves":["GR","RHOB"], optional "picks":"wellpicks"), or view="document" with "name":"<file>" (a P&ID/drawing/PDF viewer). This is how you present anything data-shaped. Works on lens:* sources too.
 - {"tool":"record_profile","args":{"field":"...","value":"..."}}  save a durable fact about the user (role, goal, industry, data) the moment you learn it — including goals you INFER from their raw actions.
 - {"tool":"read_source","args":{"path":"/absolute/path/to/file.csv"}}  mount a local data file OR a whole directory — federates it (no copy); it then appears in your perception under "sources". Formats: CSV/TSV, JSON, JSONL, WITSML XML (drill reports, logs, trajectories, BHA runs), EDM engineering exports, LAS well logs, xlsx workbooks, and fixed-width listings (well picks) — each becomes flat rows automatically. A directory (e.g. one well's WITSML tree) mounts as ONE source with every row tagged kind (object type) and file (lineage) — make_lens then extracts by kind.
 - {"tool":"run_skill","args":{"skill":"obtain-volve","command":"github"}}  run one of your skills (under "skills") — the SYSTEM fetches data, not the user. A slow, governed host effect: its output lands in your activity log, and whatever it downloads appears under "unmounted" for you to mount next. Each skill's description names its command words. When the user points you at a domain and the data isn't on disk, this is YOUR move — don't ask them to run scripts.
@@ -94,6 +94,7 @@ Rules:
 - Think at most once before acting. If the last feed item is your own thought, act — do not think again.
 - NEVER repeat a tool call you already made this turn — each step must do something new. One `show` per thing shown.
 - Record profile facts the moment you learn them.
+- BE HONEST ABOUT COVERAGE: when you answer from data, say what the answer is based on ("from the three mounted wells", "the 2008 reports only") and leave out claims the data cannot back.
 - If the user's latest message contains a file path, your VERY NEXT action MUST be read_source with that exact path.
 - You both act AND ask — take initiative on safe, reversible work, and ask the user pointed questions to steer it. Don't ask permission for reversible steps; do ask for the judgment and domain knowledge only they have. End each foreground turn by say-ing what you did/showing it, or by ask-ing."#;
 
@@ -222,6 +223,9 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
     // what this turn is ABOUT, for the live status line: the model's own thought
     // once it thinks; before that, the work the harness is steering it toward.
     let mut intent: Option<String> = None;
+    // the action tools applied this turn — folded into the answer's quiet
+    // "via …" line, so a reply that took work shows how it got there
+    let mut steps_taken: Vec<String> = Vec::new();
     for _ in 0..MAX_STEPS {
         if background {
             if let Ok(w) = wake.try_recv() {
@@ -344,7 +348,16 @@ fn run_turn(tx: &Sender<Cmd>, model: &str, mode: Mode, wake: &Receiver<Wake>) ->
             continue;
         } else {
             acted = true;
+            if name != "say" && name != "ask" {
+                steps_taken.push(name.clone());
+            }
         }
+        // an answer that took work carries how it got there ("via inspect · search")
+        let tool = if name == "say" && !steps_taken.is_empty() {
+            inject_steps(&tool, &steps_taken)
+        } else {
+            tool
+        };
         eprintln!("[agent{}] {name}: {}", if background { "·bg" } else { "" }, preview(&tool));
         // said BEFORE the tool applies: slow effects (OCR, embedding, a fetch)
         // run on the graph thread, and this line is what the user watches meanwhile
@@ -518,6 +531,22 @@ fn emit(tx: &Sender<Cmd>, tool_json: &str) {
 
 fn say_json(text: &str) -> String {
     serde_json::json!({ "tool": "say", "args": { "text": text } }).to_string()
+}
+
+/// Fold the turn's action-tool names into a say's `steps` arg (deduped, in
+/// order), so the rendered message can show its quiet "via …" line.
+fn inject_steps(tool_json: &str, steps: &[String]) -> String {
+    let Ok(mut v) = serde_json::from_str::<serde_json::Value>(tool_json) else {
+        return tool_json.to_string();
+    };
+    let mut seen = Vec::new();
+    for s in steps {
+        if !seen.contains(s) {
+            seen.push(s.clone());
+        }
+    }
+    v["args"]["steps"] = serde_json::Value::String(seen.join(" · "));
+    v.to_string()
 }
 
 /// A short one-line preview of a tool-call for dev logging.

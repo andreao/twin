@@ -190,6 +190,15 @@
   /* draggable divider on every column's right edge (and the chat's) */
   .panel-rz, .conv-rz { position: absolute; top: 0; right: -3px; width: 7px; height: 100%; cursor: col-resize; z-index: 6; }
   .panel-rz:hover, .conv-rz:hover { background: linear-gradient(to right, transparent 2px, var(--accent) 3px, transparent 5px); }
+  /* a column split vertically: the bottom half is its own page (alt-click opens here) */
+  .panel.vsplit .panel-body { flex: 1 1 55%; }
+  .panel-sub { flex: 1 1 45%; min-height: 0; display: flex; flex-direction: column; border-top: 1px solid var(--line); }
+  .panel-sub-head { display: flex; align-items: center; gap: 8px; padding: 7px 16px; border-bottom: 1px solid var(--line); flex: none; background: var(--bg); }
+  .panel-sub-body { flex: 1; min-height: 0; overflow: auto; padding: 0 16px 16px; }
+  .panel-sub-body > *:first-child { margin-top: 12px; }
+  /* what you clicked stays visibly selected while its page is open to the right */
+  [data-key].sel { background: var(--accent-soft); border-radius: 7px; }
+  tr[data-key].sel td { background: var(--accent-soft); }
 
   /* board (inside its panel): the twin as a grid of lens tiles */
   .board-grid { display: grid; grid-template-columns: 1fr; gap: 10px; align-items: start; }
@@ -255,6 +264,15 @@
   .panel-body .chartable:hover td { background: var(--accent-soft); }
   .chart { width: 100%; height: auto; max-height: 66vh; display: block; }
   .chart-line { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+  /* the depth-log view: curve tracks along measured depth, picks as markers */
+  .depth-track { fill: none; stroke: var(--line); }
+  .depth-pick { stroke: #8a5a14; stroke-width: 1; stroke-dasharray: 5 4; }
+  .pick-lbl { fill: #8a5a14; }
+  /* evidence under an answer: exact phrases quoted from documents */
+  .msg-quote { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; margin-top: 7px; font-size: 13px; font-style: italic; color: #5c5850; }
+  .msg-quote.openable { cursor: pointer; }
+  .msg-quote.openable:hover { border-color: var(--accent); background: var(--accent-soft); }
+  .msg-steps { color: var(--muted); font-size: 11.5px; margin-top: 6px; }
   .chart-axis { stroke: var(--line); stroke-width: 1; }
   .chart-lbl { fill: var(--muted); font-size: 11px; text-anchor: end; }
   .chart-bar { fill: var(--accent); opacity: .82; }
@@ -589,6 +607,7 @@
     while (panels.length > downTo) {
       const p = panels.pop();
       if (p.isBoard) boardRoot.remove(); // detach, keep alive
+      nodes.delete(`panel:${panels.length}:sub`);
       p.el.remove();
     }
     appEl.classList.toggle("split", panels.length > 0);
@@ -633,6 +652,47 @@
     removeTopPanels(i);
     mkPanel(i, title, ev);
   }
+  // ---- a column's bottom half: alt-click opens things here (a peek that keeps
+  // the top page and its selection); the graph addresses it as panel:i:sub ----
+  function ensureSub(i, title) {
+    const p = panels[i];
+    if (!p) return null;
+    if (!p.subEl) {
+      const wrap = document.createElement("div");
+      wrap.className = "panel-sub";
+      const head = document.createElement("div");
+      head.className = "panel-sub-head";
+      const t = document.createElement("div");
+      t.className = "panel-title";
+      const close = document.createElement("button");
+      close.className = "panel-btn";
+      close.title = "Close this half";
+      close.textContent = "×";
+      close.addEventListener("click", () => { send({ type: "close_panel", panel: i, sub: true }); removeSub(i); });
+      head.append(t, close);
+      const body = document.createElement("div");
+      body.className = "panel-sub-body";
+      wrap.append(head, body);
+      p.el.appendChild(wrap);
+      p.el.classList.add("vsplit");
+      p.subEl = wrap; p.subTitleEl = t; p.subBodyEl = body;
+      nodes.set(`panel:${i}:sub`, body);
+    }
+    if (title != null) p.subTitleEl.textContent = title;
+    return p.subEl;
+  }
+  function removeSub(i) {
+    const p = panels[i];
+    if (!p || !p.subEl) return;
+    p.subEl.remove();
+    p.el.classList.remove("vsplit");
+    p.subEl = p.subTitleEl = p.subBodyEl = null;
+    nodes.delete(`panel:${i}:sub`);
+  }
+  function syncSub(i, name, value) {
+    if (name === "data-title") ensureSub(i, value || "");
+    else if (name === "data-closed" && value) { removeSub(i); removeTopPanels(i + 1); }
+  }
   // A replaying snapshot references panel bodies before any chrome exists: rebuild
   // the columns from the log's own markers (data-title / data-ev on each body).
   function restorePanel(i) {
@@ -648,10 +708,32 @@
     }
     else if (name === "data-closed") removeTopPanels(i);
   }
+  // the click that caused an open: remembered so (a) the clicked thing stays
+  // visually selected in its own column, and (b) alt-click opens in the SAME
+  // column's bottom half — a peek that keeps the top page in place.
+  let lastClickEl = null, lastClickAlt = false;
+  document.addEventListener("click", (e) => {
+    lastClickEl = e.target && e.target.closest ? e.target.closest("[data-key]") : null;
+    lastClickAlt = e.altKey;
+  }, true);
+
   // open anything: create the column, then ask the graph to render into it.
   // (open_board is hosted client-side, but the event is still sent so the user's
   //  action is captured raw and lands in recents like everything else.)
   function openFromEv(i, title, ev) {
+    if (lastClickEl) {
+      const host = lastClickEl.closest(".panel-body, .panel-sub-body, #board");
+      if (host) {
+        host.querySelectorAll(".sel").forEach((x) => x.classList.remove("sel"));
+        lastClickEl.classList.add("sel");
+      }
+    }
+    if (lastClickAlt && i > 0 && panels[i - 1]) {
+      const j = i - 1;
+      ensureSub(j, title || "");
+      send(Object.assign({}, ev, { panel: j, sub: true, title: title || "" }));
+      return;
+    }
     openPanel(i, title, ev);
     send(Object.assign({}, ev, { panel: i, title: title || "" }));
   }
@@ -665,9 +747,9 @@
   // wire the interactions the rendered elements imply. In-panel keys arrive as
   // p<i>:<key>; a link inside column i opens in column i+1 (mode switches replace).
   function wire(el, key) {
-    const pm = /^p(\d+):(.+)$/.exec(key);
+    const pm = /^p(\d+)(s?):(.+)$/.exec(key);
     if (pm) {
-      const base = Number(pm[1]), k = pm[2];
+      const base = Number(pm[1]), k = pm[3], pfx = `p${pm[1]}${pm[2]}:`;
       if (/^tn:[^:]+$/.test(k)) el.addEventListener("click", () => {
         const nm = el.querySelector(".tree-name, .sens-n");
         openFromEv(base + 1, (nm ? nm.textContent : "Asset"), { type: "open_asset", id: k.slice(3) });
@@ -675,14 +757,14 @@
       else if (/^sens:[^:]+$/.test(k)) el.addEventListener("click", () => { if (el.dataset.series) openFromEv(base + 1, el.dataset.label || "Sensor", { type: "fetch", adapter: el.dataset.adapter || "cognite-datapoints", id: el.dataset.series, label: el.dataset.label || el.dataset.series }); });
       else if (/^exp:r:\d+$/.test(k)) el.addEventListener("click", () => { if (el.dataset.series) openFromEv(base + 1, el.dataset.label || "Sensor", { type: "fetch", adapter: el.dataset.adapter || "cognite-datapoints", id: el.dataset.series, label: el.dataset.label || el.dataset.series }); });
       else if (k.startsWith("doc:") && !k.includes(":n") && !k.includes(":t")) el.addEventListener("click", () => openFromEv(base + 1, k.slice(4), { type: "open_document", name: k.slice(4) }));
-      else if (k === "exp:codebtn") el.addEventListener("click", () => { const code = nodes.get(`p${base}:exp:code`); if (code) code.hidden = !code.hidden; });
+      else if (k === "exp:codebtn") el.addEventListener("click", () => { const code = nodes.get(`${pfx}exp:code`); if (code) code.hidden = !code.hidden; });
       else if (k === "fd:src") el.addEventListener("click", () => openFromEv(base + 1, el.dataset.title || el.dataset.name, { type: "open_source", name: el.dataset.name }));
       else if (/^task:\d+$/.test(k)) el.addEventListener("click", () => openFromEv(base + 1, el.dataset.title || "Task", { type: "open_task", id: Number(k.slice(5)) }));
       // a story card title / step row opens what it points at: the produced
       // thing, or its step page (log rows are ta:log; card titles are ta:actN:h)
       else if (/^(?:(?:ta|ag):act|ta:log)\d+(?::h)?$/.test(k)) el.addEventListener("click", () => { if (el.dataset.ev) openFromEv(base + 1, el.dataset.title || "", JSON.parse(el.dataset.ev)); });
       // "every step" reveals the task's full machine log in place
-      else if (k === "ta:allbtn") el.addEventListener("click", () => { const d = nodes.get(`p${base}:ta:all`); if (d) d.hidden = !d.hidden; });
+      else if (k === "ta:allbtn") el.addEventListener("click", () => { const d = nodes.get(`${pfx}ta:all`); if (d) d.hidden = !d.hidden; });
       // on a step's page: the produced thing, and the task the step served
       else if (k === "sp:open") el.addEventListener("click", () => { if (el.dataset.ev) openFromEv(base + 1, el.dataset.title || "", JSON.parse(el.dataset.ev)); });
       else if (k === "sp:task") el.addEventListener("click", () => openFromEv(base + 1, "Task", { type: "open_task", id: Number(el.dataset.id) }));
@@ -715,6 +797,8 @@
     else if (/^ln:[^:]+$/.test(key)) el.addEventListener("click", () => { const b = boardIdx(); if (b < 0) return; const n = "lens:" + key.slice(3); openFromEv(b + 1, el.dataset.title || n, { type: "open_source", name: n }); });
     // a view card in the chat opens the same thing in depth (panel 0)
     else if (/^item:\d+:h$/.test(key)) el.addEventListener("click", () => { if (el.dataset.ev) openFromEv(0, el.dataset.title || el.textContent, JSON.parse(el.dataset.ev)); });
+    // a quoted phrase under an answer opens the source it was read from
+    else if (/^item:\d+:q\d+$/.test(key)) el.addEventListener("click", () => { if (el.dataset.name) openFromEv(0, el.dataset.name, { type: "open_source", name: el.dataset.name }); });
     // recents / starred chips in the header
     else if (/^(rc|st):\d+$/.test(key)) el.addEventListener("click", () => { if (el.dataset.ev) openFromEv(0, el.dataset.title || "", JSON.parse(el.dataset.ev)); });
     // finding cards on the board open the finding itself
@@ -735,6 +819,8 @@
         const el = SVG_TAGS.has(m.tag) ? document.createElementNS(SVG_NS, m.tag) : document.createElement(m.tag);
         el.dataset.key = m.key;
         nodes.set(m.key, el);
+        const ps = /^panel:(\d+):sub$/.exec(m.parent);
+        if (ps) { restorePanel(Number(ps[1])); ensureSub(Number(ps[1]), null); }
         const parent = nodes.get(m.parent);
         if (parent) insertAt(parent, el, m.index);
         wire(el, m.key);
@@ -745,9 +831,12 @@
       case "setAttr": {
         const pb = /^panel:(\d+):body$/.exec(m.key);
         if (pb) restorePanel(Number(pb[1]));
+        const ps = /^panel:(\d+):sub$/.exec(m.key);
+        if (ps) { restorePanel(Number(ps[1])); ensureSub(Number(ps[1]), null); }
         const el = nodes.get(m.key);
         if (el) { if (m.value == null) el.removeAttribute(m.name); else el.setAttribute(m.name, m.value); }
         if (pb) syncPanel(Number(pb[1]), m.name, m.value);
+        if (ps) syncSub(Number(ps[1]), m.name, m.value);
         break;
       }
       case "setProp": { const el = nodes.get(m.key); if (el) el[m.name] = m.value; break; }

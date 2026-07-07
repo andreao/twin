@@ -500,6 +500,31 @@ fn agent_page_shows_agenda_and_activity_tidily() {
 }
 
 #[test]
+fn a_column_splits_vertically_into_an_addressable_bottom_half() {
+    let path = write_temp_csv();
+    let mut g = JsGraph::new_twin();
+    g.twin_read_source("turbines", &path, "mounted");
+    g.twin_event(r#"{"type":"open_source","name":"turbines","panel":0}"#);
+    // "sub": the same column's bottom half — its own root, its own key prefix
+    g.twin_event(r#"{"type":"open_source","name":"turbines","mode":"schema","panel":0,"sub":true}"#);
+    let muts = g.twin_from(0);
+    assert!(muts.contains(r#""key":"panel:0:sub","name":"data-title""#), "sub half not stamped: {muts}");
+    assert!(muts.contains("p0s:sch:tbl"), "sub content not namespaced p0s: — {muts}");
+    assert!(muts.contains("p0:exp:tbl"), "top half must survive the split");
+    // closing the bottom half marks it closed without touching the top
+    let before = g.twin_total();
+    g.twin_event(r#"{"type":"close_panel","panel":0,"sub":true}"#);
+    let tail = g.twin_from(before);
+    assert!(tail.contains(r#""key":"panel:0:sub","name":"data-closed""#), "sub close not marked: {tail}");
+    assert!(!tail.contains(r#""key":"panel:0:body","name":"data-closed""#), "closing the sub must not close the column");
+    // re-opening the top half clears any split content with it
+    g.twin_event(r#"{"type":"open_source","name":"turbines","mode":"schema","panel":0,"sub":true}"#);
+    let b2 = g.twin_total();
+    g.twin_event(r#"{"type":"open_source","name":"turbines","panel":0}"#);
+    assert!(g.twin_from(b2).contains(r#""op":"remove","key":"p0s:"#), "opening the top did not clear the split");
+}
+
+#[test]
 fn closing_a_column_is_an_event_and_replays() {
     let path = write_temp_csv();
     let mut g = JsGraph::new_twin();

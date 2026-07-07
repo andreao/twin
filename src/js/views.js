@@ -76,6 +76,25 @@ class Feed {
       this._emit({ op: 'create', key: tk, tag: 'div', parent: key, index: 0 });
       this._emit({ op: 'setAttr', key: tk, name: 'class', value: 'text' });
       this._emit({ op: 'setText', key: tk, text: item.text || '' });
+      // the evidence the answer stands on: exact phrases from documents, each a
+      // doorway back to its source
+      let quotes = [];
+      try { quotes = JSON.parse(item.quotes || '[]'); } catch (_) { quotes = []; }
+      quotes.forEach((q, i) => {
+        if (!q || !q.text) return;
+        const qk = `${key}:q${i}`;
+        this._emit({ op: 'create', key: qk, tag: 'div', parent: key, index: i + 1 });
+        this._emit({ op: 'setAttr', key: qk, name: 'class', value: 'msg-quote' + (q.source ? ' openable' : '') });
+        if (q.source) this._emit({ op: 'setAttr', key: qk, name: 'data-name', value: q.source });
+        this._emit({ op: 'setText', key: qk, text: `“${q.text}”${q.source ? '  — ' + q.source : ''}` });
+      });
+      // the quiet how-line: what the turn did to get here (full story: agent page)
+      if (item.steps) {
+        const sk = `${key}:how`;
+        this._emit({ op: 'create', key: sk, tag: 'div', parent: key, index: quotes.length + 1 });
+        this._emit({ op: 'setAttr', key: sk, name: 'class', value: 'msg-steps' });
+        this._emit({ op: 'setText', key: sk, text: `via ${item.steps}` });
+      }
     }
   }
 }

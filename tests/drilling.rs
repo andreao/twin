@@ -116,6 +116,43 @@ fn show_survives_the_models_loose_column_names() {
 }
 
 #[test]
+fn the_depth_view_draws_curves_and_formation_tops() {
+    let mut g = JsGraph::new_twin();
+    mount_volve(&mut g);
+    // inline in the conversation: curves as tracks along MD, picks overlaid —
+    // matched to THIS well through normalizeWell (LAS says 15/9-F-14, picks say
+    // NO 15/9-F-14), and only tops inside the logged interval appear
+    g.twin_agent_tool(
+        r#"{"tool":"show","args":{"view":"depth","source":"log-15-9-F-14","curves":["GR","RHOB"],"picks":"wellpicks","title":"F-14 through the reservoir"}}"#,
+    );
+    let muts = g.twin_from(0);
+    assert!(muts.contains("chart depth"), "no depth svg: {}", &muts[..muts.len().min(300)]);
+    assert!(muts.contains(r#""text":"GR""#), "curve track header missing");
+    assert!(muts.contains("Hugin Fm. Top"), "formation pick missing");
+    assert!(muts.contains("depth-pick"), "pick marker missing");
+    assert!(!muts.contains("Utsira Fm. Top"), "a pick outside the logged interval leaked in");
+
+    // and as a page mode: any depth-indexed source earns the Depth log view
+    g.twin_event(r#"{"type":"open_source","name":"log-15-9-F-14","mode":"depth","panel":0}"#);
+    let page = g.twin_from(0);
+    assert!(page.contains("mode:log-15-9-F-14:depth"), "no Depth log mode button: {page}");
+    assert!(page.contains("p0:exp:depth"), "depth view not rendered into the panel");
+}
+
+#[test]
+fn answers_carry_their_evidence_and_their_steps() {
+    let mut g = JsGraph::new_twin();
+    g.twin_agent_tool(
+        r#"{"tool":"say","args":{"text":"The reservoir was found at 2113 m MD.","quotes":[{"source":"doc:final-well-report","text":"Hugin formation was penetrated at 2113 m"}],"steps":"search · read_document"}}"#,
+    );
+    let muts = g.twin_from(0);
+    assert!(muts.contains("msg-quote"), "no quote block under the answer: {muts}");
+    assert!(muts.contains("Hugin formation was penetrated"), "quote text missing");
+    assert!(muts.contains("doc:final-well-report"), "quote source missing");
+    assert!(muts.contains("via search · read_document"), "no steps line");
+}
+
+#[test]
 fn host_effects_report_into_the_activity_log() {
     let mut g = JsGraph::new_twin();
     g.twin_log_step("read", "final-well-report.pdf", "2 text blocks from the text layer", "doc:final-well-report", "");

@@ -85,9 +85,9 @@ const T = (() => {
       for (const [p, t] of taskPanels) {
         if (t !== r.id) continue;
         const word = r.status === 'active' ? 'in progress' : r.status === 'done' ? 'done' : 'planned';
-        TWIN_MUT.push({ op: 'setText', key: `p${p}:ta:st`, text: word });
-        TWIN_MUT.push({ op: 'setAttr', key: `p${p}:ta:st`, name: 'class', value: `fd-sev task-${r.status}` });
-        TWIN_MUT.push({ op: 'setAttr', key: `p${p}:ta:now`, name: 'hidden', value: r.status === 'active' ? null : 'true' });
+        TWIN_MUT.push({ op: 'setText', key: `${panelPfx(p)}ta:st`, text: word });
+        TWIN_MUT.push({ op: 'setAttr', key: `${panelPfx(p)}ta:st`, name: 'class', value: `fd-sev task-${r.status}` });
+        TWIN_MUT.push({ op: 'setAttr', key: `${panelPfx(p)}ta:now`, name: 'hidden', value: r.status === 'active' ? null : 'true' });
       }
     }
     updateAgentNow();
@@ -110,7 +110,7 @@ const T = (() => {
         // an open page of this task shows what's happening live
         if (e.kind === 'note') {
           for (const [p, t] of taskPanels) {
-            if (t === e.task) TWIN_MUT.push({ op: 'setText', key: `p${p}:ta:now:t`, text: e.text });
+            if (t === e.task) TWIN_MUT.push({ op: 'setText', key: `${panelPfx(p)}ta:now:t`, text: e.text });
           }
         }
       }
@@ -413,6 +413,17 @@ const T = (() => {
     return (m && m.title) || c;
   };
 
+  // Deterministic linking helpers (§8.1: explicit joins, no similarity scores) —
+  // in scope for lens code, and used by the depth view to match picks to a well:
+  // normalizeWellName reconciles naming across systems ("NO 15/9-F-14 B" ⇄
+  // "15/9-F-14 B"); inInterval is the depth/time interval-join primitive.
+  const normalizeWellName = (s) => String(s == null ? '' : s).toUpperCase()
+    .replace(/^NO\s+/, '').replace(/\s*\/\s*/g, '/').replace(/\s+/g, ' ').trim();
+  const inInterval = (v, lo, hi) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= Number(lo) && n <= Number(hi);
+  };
+
   // The twin watching its own understanding: a mounted source whose fields lack
   // documented meaning IS a data issue — filed as a finding the moment the source
   // lands (deterministic, model-free), updated as annotations arrive, and resolved
@@ -576,13 +587,20 @@ const T = (() => {
     return name;
   }
 
+  // Panel addressing: a column can split vertically — the bottom half is the
+  // same column index plus 0.5, its keys prefixed p<i>s: and its root
+  // panel:<i>:sub.  Everything that compares panel indexes keeps working
+  // because the halves order naturally between the columns.
+  const panelPfx = (p) => (Number.isInteger(p) ? `p${p}:` : `p${Math.floor(p)}s:`);
+  const panelRoot = (p) => (Number.isInteger(p) ? `panel:${p}:body` : `panel:${Math.floor(p)}:sub`);
+
   // Emit a close marker for every open column ≥ `from` (one marker at the lowest
   // index — the client tears down that column and everything right of it).
   function markClosed(from) {
     const above = [...openPanels].filter((pi) => pi >= from);
     if (!above.length) return;
     above.forEach((pi) => openPanels.delete(pi));
-    TWIN_MUT.push({ op: 'setAttr', key: `panel:${Math.min(...above)}:body`, name: 'data-closed', value: 'true' });
+    TWIN_MUT.push({ op: 'setAttr', key: panelRoot(Math.min(...above)), name: 'data-closed', value: 'true' });
   }
 
   // The user closed a column: clear its content (and everything to its right) and
@@ -602,7 +620,8 @@ const T = (() => {
 
   function viewer(panel, title, ev) {
     const p = Number(panel) || 0;
-    // opening at p invalidates p and every column to its right
+    // opening at p invalidates p and everything to its right (a column's bottom
+    // half sits at p+0.5, so opening the top half clears its split too)
     for (const [pi, ks] of [...panelKeys]) {
       if (pi >= p) {
         for (const k of ks) TWIN_MUT.push({ op: 'remove', key: k });
@@ -611,18 +630,18 @@ const T = (() => {
     }
     for (const pi of [...taskPanels.keys()]) if (pi >= p) taskPanels.delete(pi);
     for (const pi of [...agentPanels]) if (pi >= p) agentPanels.delete(pi);
-    markClosed(p + 1);
+    markClosed(Math.floor(p) + 1);
     openPanels.add(p);
     const fresh = [];
     panelKeys.set(p, fresh);
-    const root = `panel:${p}:body`;
+    const root = panelRoot(p);
     TWIN_MUT.push({ op: 'setAttr', key: root, name: 'data-closed', value: null });
     // stamp the column with what it shows: a replaying client rebuilds the panel
     // chrome (title, star target) from these marks — open columns survive reloads
     // because the UI state IS in the log, not in the browser.
     TWIN_MUT.push({ op: 'setAttr', key: root, name: 'data-title', value: String(title || '') });
     if (ev) TWIN_MUT.push({ op: 'setAttr', key: root, name: 'data-ev', value: JSON.stringify(ev) });
-    const K = (k) => `p${p}:${k}`;
+    const K = (k) => `${panelPfx(p)}${k}`;
     return {
       panel: p,
       key: K,
@@ -644,14 +663,25 @@ const T = (() => {
     if (mode === 'schema') return renderSchema(V, name, s);
     if (mode === 'tree' && name === 'assets') return renderTree(V, name, s);
     if (mode === 'timeline' && name === 'events') return renderTimeline(V, name, s);
+    if (mode === 'depth') return renderDepthPage(V, name);
     renderTable(V, name, s);
   }
 
+  function renderDepthPage(V, name) {
+    renderModes(V, name, 'depth', 0);
+    V.add('div', 'exp:depth', null, 1);
+    renderDepthInto(V.key('exp:depth'), V.key('exp:depth') + ':d', name, {});
+  }
+
   // per-source view modes (§11.15: several lenses over the same data) — every
-  // table source carries a Schema view; some carry richer ones on top
+  // table source carries a Schema view; some carry richer ones on top, and any
+  // source with a depth column earns the depth-log view
   const MODES = { assets: [['table', 'Table'], ['tree', 'Hierarchy']], events: [['table', 'Table'], ['timeline', 'Timeline']] };
   function renderModes(V, name, current, index) {
-    const modes = [...(MODES[name] || [['table', 'Table']]), ['schema', 'Schema']];
+    const modes = [...(MODES[name] || [['table', 'Table']])];
+    const sm = sources.get(name);
+    if (sm && depthFieldOf(sm.sample || [])) modes.push(['depth', 'Depth log']);
+    modes.push(['schema', 'Schema']);
     V.add('div', 'exp:modes', null, index || 0); V.set('exp:modes', 'class', 'view-modes');
     modes.forEach(([m, lbl], i) => { const k = `mode:${name}:${m}`; V.add('button', k, 'exp:modes', i); V.set(k, 'class', 'mode-btn' + (m === current ? ' active' : '')); V.text(k, lbl); });
   }
@@ -1356,7 +1386,7 @@ const T = (() => {
     if (!agentPanels.size || !activeTaskId) return;
     const n = [...activityTail].reverse().find((x) => x.kind === 'note' && x.task === activeTaskId);
     if (!n) return;
-    for (const p of agentPanels) TWIN_MUT.push({ op: 'setText', key: `p${p}:ag:live`, text: n.text });
+    for (const p of agentPanels) TWIN_MUT.push({ op: 'setText', key: `${panelPfx(p)}ag:live`, text: n.text });
   }
 
   // What's happening — the plan (the active item pulses and carries its live
@@ -1547,19 +1577,10 @@ const T = (() => {
       if (sid === undefined) throw new Error(`table("${n}"): no such source; mount or build it first`);
       return G.stateOf(sid).support().map((r) => r.asObject());
     };
-    // Deterministic linking helpers (§8.1: explicit joins, no similarity scores):
-    // normalizeWell reconciles well naming across systems ("NO 15/9-F-14 B" ⇄
-    // "15/9-F-14 B"); inInterval is the depth/time interval-join primitive.
-    const normalizeWell = (s) => String(s == null ? '' : s).toUpperCase()
-      .replace(/^NO\s+/, '').replace(/\s*\/\s*/g, '/').replace(/\s+/g, ' ').trim();
-    const inInterval = (v, lo, hi) => {
-      const n = Number(v);
-      return Number.isFinite(n) && n >= Number(lo) && n <= Number(hi);
-    };
     let out;
     try {
       out = new Function('rows', 'table', 'normalizeWell', 'inInterval', code)(
-        G.stateOf(id).support().map((r) => r.asObject()), table, normalizeWell, inInterval);
+        G.stateOf(id).support().map((r) => r.asObject()), table, normalizeWellName, inInterval);
     }
     catch (err) { step('failed', { tone: 'error', detail: `${err.message}; fix the code and re-author` }); return; }
     if (!Array.isArray(out)) { step('failed', { tone: 'error', detail: 'the code must return an array of rows' }); return; }
@@ -1778,6 +1799,91 @@ const T = (() => {
     logStep('failed', String(label), { subject: `chart:${label}`, tone: 'warn', detail: `no chart: ${msg}` });
   }
 
+  // Well-log depth view (§9.14: depth-indexed series are time series keyed
+  // differently) — curves as side-by-side tracks along measured depth, with
+  // formation picks drawn as horizontal markers across all tracks: the render a
+  // drilling engineer actually reads.  Works on any source with a depth column
+  // (a LAS mount, a trajectory, a kind-tagged WITSML tree).
+  function depthFieldOf(rows) {
+    for (const c of ['DEPT', 'dept', 'md', 'MD', 'depth', 'Depth', 'tvd', 'TVD']) {
+      if (rows.some((r) => typeof r[c] === 'number')) return c;
+    }
+    return null;
+  }
+  function renderDepthInto(root, pfx, srcName, a) {
+    const b = vbuild(root, pfx);
+    const all = rowsOf(srcName);
+    const df = depthFieldOf(all);
+    if (!df) {
+      b.add('div', 'note', null, 0); b.set('note', 'class', 'explorer-note');
+      b.text('note', 'no depth column found — a depth view needs DEPT / md / depth');
+      return;
+    }
+    const rows = all.filter((r) => typeof r[df] === 'number').sort((x, y) => x[df] - y[df]);
+    let curves = Array.isArray(a.curves) && a.curves.length
+      ? a.curves.filter((c) => rows.some((r) => typeof r[c] === 'number') && c !== df)
+      : Object.keys(rows[0] || {}).filter((c) =>
+          c !== df && rows.filter((r) => typeof r[c] === 'number').length > rows.length * 0.5);
+    curves = curves.slice(0, 4);
+    if (!curves.length) {
+      b.add('div', 'note', null, 0); b.set('note', 'class', 'explorer-note');
+      b.text('note', 'no numeric curves to draw against depth');
+      return;
+    }
+    const dmin = rows[0][df], dmax = rows[rows.length - 1][df];
+    // picks: an optional second source of formation tops, matched to this well
+    let picks = [];
+    const pname = a.picks || (sources.has('wellpicks') ? 'wellpicks' : null);
+    if (pname && sources.has(resolveSourceName(pname)) && dmax > dmin) {
+      const prows = rowsOf(resolveSourceName(pname));
+      const pd = depthFieldOf(prows);
+      const plabel = Object.keys(prows[0] || {}).find((c) => typeof prows[0][c] === 'string' && !/well/i.test(c));
+      const pwell = Object.keys(prows[0] || {}).find((c) => /well/i.test(c));
+      const thisWell = rows.find((r) => r.well != null);
+      picks = prows.filter((p) => typeof p[pd] === 'number' && inInterval(p[pd], dmin, dmax)
+        && (!pwell || !thisWell || normalizeWellName(p[pwell]) === normalizeWellName(thisWell.well)))
+        .map((p) => ({ d: p[pd], label: plabel ? String(p[plabel]) : '' }));
+    }
+    const W = 1000, H = 640, padL = 70, padT = 36, padB = 14, padR = 10;
+    const trackW = (W - padL - padR) / curves.length;
+    const y = (d) => padT + (dmax > dmin ? (d - dmin) / (dmax - dmin) : 0) * (H - padT - padB);
+    b.add('div', 'note', null, 0); b.set('note', 'class', 'explorer-note');
+    b.text('note', `${fmtInt(rows.length)} stations · ${fmtNum(dmin)}–${fmtNum(dmax)} ${df}` +
+      (picks.length ? ` · ${picks.length} formation tops` : ''));
+    b.add('svg', 'svg', null, 1); b.set('svg', 'viewBox', `0 0 ${W} ${H}`); b.set('svg', 'class', 'chart depth');
+    // depth axis: 5 labeled ticks down the left edge
+    for (let i = 0; i <= 4; i++) {
+      const d = dmin + ((dmax - dmin) * i) / 4;
+      b.add('text', `dl${i}`, 'svg', i); b.set(`dl${i}`, 'x', padL - 8); b.set(`dl${i}`, 'y', y(d) + 4);
+      b.set(`dl${i}`, 'class', 'chart-lbl'); b.set(`dl${i}`, 'text-anchor', 'end'); b.text(`dl${i}`, fmtNum(d));
+    }
+    curves.forEach((c, ci) => {
+      const x0 = padL + ci * trackW;
+      const vals = rows.map((r) => r[c]).filter((v) => typeof v === 'number');
+      const vmin = Math.min(...vals), vmax = Math.max(...vals);
+      const x = (v) => x0 + 6 + (vmax > vmin ? (v - vmin) / (vmax - vmin) : 0.5) * (trackW - 12);
+      b.add('rect', `fr${ci}`, 'svg', 10 + ci * 3); b.set(`fr${ci}`, 'x', x0); b.set(`fr${ci}`, 'y', padT);
+      b.set(`fr${ci}`, 'width', trackW); b.set(`fr${ci}`, 'height', H - padT - padB); b.set(`fr${ci}`, 'class', 'depth-track');
+      b.add('text', `th${ci}`, 'svg', 11 + ci * 3); b.set(`th${ci}`, 'x', x0 + trackW / 2); b.set(`th${ci}`, 'y', padT - 10);
+      b.set(`th${ci}`, 'class', 'chart-lbl'); b.set(`th${ci}`, 'text-anchor', 'middle');
+      b.text(`th${ci}`, fieldTitle(srcName, c));
+      let d = '';
+      let pen = false;
+      rows.forEach((r) => {
+        if (typeof r[c] !== 'number') { pen = false; return; } // nulls break the line
+        d += (pen ? 'L' : 'M') + x(r[c]).toFixed(1) + ' ' + y(r[df]).toFixed(1) + ' ';
+        pen = true;
+      });
+      b.add('path', `cv${ci}`, 'svg', 12 + ci * 3); b.set(`cv${ci}`, 'd', d.trim()); b.set(`cv${ci}`, 'class', 'chart-line');
+    });
+    picks.forEach((p, i) => {
+      b.add('line', `pk${i}`, 'svg', 40 + i * 2); b.set(`pk${i}`, 'x1', padL); b.set(`pk${i}`, 'y1', y(p.d));
+      b.set(`pk${i}`, 'x2', W - padR); b.set(`pk${i}`, 'y2', y(p.d)); b.set(`pk${i}`, 'class', 'depth-pick');
+      b.add('text', `pl${i}`, 'svg', 41 + i * 2); b.set(`pl${i}`, 'x', W - padR - 4); b.set(`pl${i}`, 'y', y(p.d) - 4);
+      b.set(`pl${i}`, 'class', 'chart-lbl pick-lbl'); b.set(`pl${i}`, 'text-anchor', 'end'); b.text(`pl${i}`, p.label);
+    });
+  }
+
   function renderDocInto(root, pfx, name) {
     const b = vbuild(root, pfx);
     const ext = String(name).split('.').pop().toLowerCase();
@@ -1817,6 +1923,13 @@ const T = (() => {
       cardOpen(sq, title, { type: 'open_source', name: srcName, mode: 'tree' });
       return;
     }
+    if (view === 'depth' || view === 'log') {
+      const title = a.title || `${srcTitle(srcName)} — depth view`;
+      const sq = append('view', { text: title, view: 'depth' });
+      renderDepthInto(`item:${sq}:body`, `v${sq}`, srcName, a);
+      cardOpen(sq, title, { type: 'open_source', name: srcName, mode: 'depth' });
+      return;
+    }
     // table (default)
     let rows = rowsOf(srcName);
     if (a.filter) { const q = String(a.filter).toLowerCase(); rows = rows.filter((r) => Object.values(r).some((v) => v != null && String(v).toLowerCase().includes(q))); }
@@ -1853,7 +1966,21 @@ const T = (() => {
         if (activeTaskId) logStep('note', t);
         break;
       }
-      case 'say': append('agent', { text: String(a.text || '') }); break;
+      case 'say': {
+        // an answer can carry its EVIDENCE: exact phrases quoted from documents
+        // (openable back to their source), and the quiet list of steps the turn
+        // took — provenance in the chat, not just in the work log.
+        const quotes = Array.isArray(a.quotes)
+          ? a.quotes.filter((q) => q && q.text).slice(0, 4)
+              .map((q) => ({ source: String(q.source || ''), text: String(q.text) }))
+          : [];
+        append('agent', {
+          text: String(a.text || ''),
+          quotes: quotes.length ? JSON.stringify(quotes) : '',
+          steps: String(a.steps || ''),
+        });
+        break;
+      }
       case 'ask': append('question', { text: String(a.question || a.text || ''), options: a.options || [] }); break;
       case 'record_profile': recordProfile(a.field, a.value); break;
       case 'inspect': inspectSource(a.source); break;
@@ -1907,6 +2034,8 @@ const T = (() => {
 
   function deriveFromInput(e) {
     const note = `input#${e.seq}`;
+    // "sub": the event targets a column's bottom half — address it as p + 0.5
+    if (e.sub && e.panel != null) e = Object.assign({}, e, { panel: (Number(e.panel) || 0) + 0.5 });
     // the agent perceives the user's raw behavior — it derives goals from what they DO
     userActions.push(describeAction(e));
     if (userActions.length > 12) userActions.shift();
