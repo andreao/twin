@@ -512,6 +512,7 @@ fn an_empty_plan_shows_the_deterministic_backlog() {
     assert!(d.contains("Document the fields of turbines"), "no backlog row: {d}");
     assert!(d.contains(r#""text":"next""#) && d.contains("act-verb"), "backlog rows lost the plan-list style: {d}");
     assert!(d.contains("4 fields still need a meaning"), "no remaining-count detail: {d}");
+    assert!(d.contains(r#""name":"data-doc""#), "backlog row not clickable-to-brief: {d}");
     assert!(!d.contains("no plan yet"), "empty shrug shown despite known work");
 }
 

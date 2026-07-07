@@ -113,6 +113,11 @@
   /* the quiet facts line: numbers, errors, lineage — never mixed into the prose */
   .act-detail { color: var(--muted); font-size: 11.5px; margin-top: 2px; line-height: 1.45; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
   .act-row.t-error .act-verb { color: #8a2e20; font-weight: 700; }
+  /* the live now-row: verb chip glows while the agent is actually computing */
+  .now-row .act-text { color: var(--muted); }
+  .now-row.on .act-text { color: var(--ink); }
+  .now-row.on .now-verb { color: var(--accent); font-weight: 700; animation: nowpulse 1.5s ease-in-out infinite; }
+  @keyframes nowpulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
   .act-row.t-error .act-detail { color: #8a2e20; opacity: .75; }
   .act-row.t-warn .act-verb { color: #8a5a14; font-weight: 700; }
   .act-row[data-title], .act-row.openable { cursor: pointer; }
@@ -196,9 +201,11 @@
   .panel-sub-head { display: flex; align-items: center; gap: 8px; padding: 7px 16px; border-bottom: 1px solid var(--line); flex: none; background: var(--bg); }
   .panel-sub-body { flex: 1; min-height: 0; overflow: auto; padding: 0 16px 16px; }
   .panel-sub-body > *:first-child { margin-top: 12px; }
-  /* what you clicked stays visibly selected while its page is open to the right */
-  [data-key].sel { background: var(--accent-soft); border-radius: 7px; }
-  tr[data-key].sel td { background: var(--accent-soft); }
+  /* anything wired to open something reads as clickable, and what you clicked
+     stays visibly selected while its page is open to the right */
+  .opens { cursor: pointer; }
+  .opens.sel { background: var(--accent-soft); border-radius: 7px; }
+  tr.opens.sel td { background: var(--accent-soft); }
 
   /* board (inside its panel): the twin as a grid of lens tiles */
   .board-grid { display: grid; grid-template-columns: 1fr; gap: 10px; align-items: start; }
@@ -481,6 +488,8 @@
         el.textContent = el.dataset.srv;
         delete el.dataset.srv;
       }
+      const row = el.closest(".now-row");
+      if (row) row.classList.toggle("on", statusOn);
     });
   }
 
@@ -713,7 +722,9 @@
   // column's bottom half — a peek that keeps the top page in place.
   let lastClickEl = null, lastClickAlt = false;
   document.addEventListener("click", (e) => {
-    lastClickEl = e.target && e.target.closest ? e.target.closest("[data-key]") : null;
+    // only elements that actually open something (.opens, marked by wire) count —
+    // never the innermost span the pointer happened to land on
+    lastClickEl = e.target && e.target.closest ? e.target.closest(".opens") : null;
     lastClickAlt = e.altKey;
   }, true);
 
@@ -747,67 +758,71 @@
   // wire the interactions the rendered elements imply. In-panel keys arrive as
   // p<i>:<key>; a link inside column i opens in column i+1 (mode switches replace).
   function wire(el, key) {
+    // every click this function attaches marks its element .opens — the
+    // selection highlight and the pointer cursor bind to exactly these
+    const on = (fn) => { el.addEventListener("click", fn); el.classList.add("opens"); };
     const pm = /^p(\d+)(s?):(.+)$/.exec(key);
     if (pm) {
       const base = Number(pm[1]), k = pm[3], pfx = `p${pm[1]}${pm[2]}:`;
-      if (/^tn:[^:]+$/.test(k)) el.addEventListener("click", () => {
+      if (/^tn:[^:]+$/.test(k)) on(() => {
         const nm = el.querySelector(".tree-name, .sens-n");
         openFromEv(base + 1, (nm ? nm.textContent : "Asset"), { type: "open_asset", id: k.slice(3) });
       });
-      else if (/^sens:[^:]+$/.test(k)) el.addEventListener("click", () => { if (el.dataset.series) openFromEv(base + 1, el.dataset.label || "Sensor", { type: "fetch", adapter: el.dataset.adapter || "cognite-datapoints", id: el.dataset.series, label: el.dataset.label || el.dataset.series }); });
-      else if (/^exp:r:\d+$/.test(k)) el.addEventListener("click", () => { if (el.dataset.series) openFromEv(base + 1, el.dataset.label || "Sensor", { type: "fetch", adapter: el.dataset.adapter || "cognite-datapoints", id: el.dataset.series, label: el.dataset.label || el.dataset.series }); });
-      else if (k.startsWith("doc:") && !k.includes(":n") && !k.includes(":t")) el.addEventListener("click", () => openFromEv(base + 1, k.slice(4), { type: "open_document", name: k.slice(4) }));
-      else if (k === "exp:codebtn") el.addEventListener("click", () => { const code = nodes.get(`${pfx}exp:code`); if (code) code.hidden = !code.hidden; });
-      else if (k === "fd:src") el.addEventListener("click", () => openFromEv(base + 1, el.dataset.title || el.dataset.name, { type: "open_source", name: el.dataset.name }));
-      else if (/^task:\d+$/.test(k)) el.addEventListener("click", () => openFromEv(base + 1, el.dataset.title || "Task", { type: "open_task", id: Number(k.slice(5)) }));
+      else if (/^sens:[^:]+$/.test(k)) on(() => { if (el.dataset.series) openFromEv(base + 1, el.dataset.label || "Sensor", { type: "fetch", adapter: el.dataset.adapter || "cognite-datapoints", id: el.dataset.series, label: el.dataset.label || el.dataset.series }); });
+      else if (/^exp:r:\d+$/.test(k)) on(() => { if (el.dataset.series) openFromEv(base + 1, el.dataset.label || "Sensor", { type: "fetch", adapter: el.dataset.adapter || "cognite-datapoints", id: el.dataset.series, label: el.dataset.label || el.dataset.series }); });
+      else if (k.startsWith("doc:") && !k.includes(":n") && !k.includes(":t")) on(() => openFromEv(base + 1, k.slice(4), { type: "open_document", name: k.slice(4) }));
+      else if (k === "exp:codebtn") on(() => { const code = nodes.get(`${pfx}exp:code`); if (code) code.hidden = !code.hidden; });
+      else if (k === "fd:src") on(() => openFromEv(base + 1, el.dataset.title || el.dataset.name, { type: "open_source", name: el.dataset.name }));
+      else if (/^task:\d+$/.test(k)) on(() => openFromEv(base + 1, el.dataset.title || "Task", { type: "open_task", id: Number(k.slice(5)) }));
       // a story card title / step row opens what it points at: the produced
       // thing, or its step page (log rows are ta:log; card titles are ta:actN:h)
-      else if (/^(?:(?:ta|ag):act|ta:log)\d+(?::h)?$/.test(k)) el.addEventListener("click", () => { if (el.dataset.ev) openFromEv(base + 1, el.dataset.title || "", JSON.parse(el.dataset.ev)); });
+      else if (/^(?:(?:ta|ag):act|ta:log)\d+(?::h)?$/.test(k)) on(() => { if (el.dataset.ev) openFromEv(base + 1, el.dataset.title || "", JSON.parse(el.dataset.ev)); });
       // "every step" reveals the task's full machine log in place
-      else if (k === "ta:allbtn") el.addEventListener("click", () => { const d = nodes.get(`${pfx}ta:all`); if (d) d.hidden = !d.hidden; });
+      else if (k === "ta:allbtn") on(() => { const d = nodes.get(`${pfx}ta:all`); if (d) d.hidden = !d.hidden; });
       // on a step's page: the produced thing, and the task the step served
-      else if (k === "sp:open") el.addEventListener("click", () => { if (el.dataset.ev) openFromEv(base + 1, el.dataset.title || "", JSON.parse(el.dataset.ev)); });
-      else if (k === "sp:task") el.addEventListener("click", () => openFromEv(base + 1, "Task", { type: "open_task", id: Number(el.dataset.id) }));
-      else if (k === "ta:work") el.addEventListener("click", () => send({ type: "user_message", text: `Start working on “${el.dataset.text}” now: take the next concrete step and show me the result.` }));
-      else if (k === "ta:done") el.addEventListener("click", () => {
+      else if (k === "sp:open") on(() => { if (el.dataset.ev) openFromEv(base + 1, el.dataset.title || "", JSON.parse(el.dataset.ev)); });
+      else if (k === "sp:task") on(() => openFromEv(base + 1, "Task", { type: "open_task", id: Number(el.dataset.id) }));
+      else if (k === "ta:work") on(() => send({ type: "user_message", text: `Start working on “${el.dataset.text}” now: take the next concrete step and show me the result.` }));
+      else if (k === "ta:done") on(() => {
         send({ type: "set_task", id: Number(el.dataset.id), status: el.dataset.status || "done" });
         openFromEv(base, panels[base] ? panels[base].title : "Task", { type: "open_task", id: Number(el.dataset.id) });
       });
-      else if (k === "fd:investigate") el.addEventListener("click", () => send({ type: "user_message", text: `Investigate this finding and show me the evidence: “${el.dataset.text}”` }));
-      // schema gaps have one fix: documentation — both buttons brief the agent the same way
-      else if (k === "fd:document" || k === "exp:annbtn") el.addEventListener("click", () => send({ type: "user_message", text: `Document the fields of ${el.dataset.title}: annotate every field that still lacks a title with a short human title and a one-sentence meaning. If a field's meaning cannot be read from the data, ask me.` }));
-      else if (k === "fd:fix") el.addEventListener("click", () => send({ type: "user_message", text: `Propose a concrete fix for this finding: “${el.dataset.text}”` }));
-      else if (k === "fd:resolve") el.addEventListener("click", () => {
+      else if (k === "fd:investigate") on(() => send({ type: "user_message", text: `Investigate this finding and show me the evidence: “${el.dataset.text}”` }));
+      // schema gaps have one fix: documentation — buttons and backlog rows brief the agent the same way
+      else if (k === "fd:document" || k === "exp:annbtn") on(() => send({ type: "user_message", text: `Document the fields of ${el.dataset.title}: annotate every field that still lacks a title with a short human title and a one-sentence meaning. If a field's meaning cannot be read from the data, ask me.` }));
+      else if (/^ag:bk\d+$/.test(k)) on(() => { if (el.dataset.doc) send({ type: "user_message", text: `Document the fields of ${el.dataset.doc} NOW: annotate every field that still lacks a title with a short human title and a one-sentence meaning. If a field's meaning cannot be read from the data, ask me.` }); });
+      else if (k === "fd:fix") on(() => send({ type: "user_message", text: `Propose a concrete fix for this finding: “${el.dataset.text}”` }));
+      else if (k === "fd:resolve") on(() => {
         send({ type: "resolve_finding", id: Number(el.dataset.id) });
         openFromEv(base, panels[base] ? panels[base].title : "Finding", { type: "open_finding", id: Number(el.dataset.id) });
       });
       // mode keys are mode:<name>:<mode>, where <name> itself may contain ':' (lens:foo)
-      else if (k.startsWith("mode:")) el.addEventListener("click", () => { const parts = k.split(":"); const mode = parts.pop(); const name = parts.slice(1).join(":"); openFromEv(base, panels[base] ? panels[base].title : name, { type: "open_source", name, mode }); });
+      else if (k.startsWith("mode:")) on(() => { const parts = k.split(":"); const mode = parts.pop(); const name = parts.slice(1).join(":"); openFromEv(base, panels[base] ? panels[base].title : name, { type: "open_source", name, mode }); });
       // schema doorways: a reference cell, a field-guide line, or a map node
-      else if (k.startsWith("sch:ref:")) el.addEventListener("click", () => openFromEv(base + 1, el.dataset.title || el.dataset.name, { type: "open_source", name: el.dataset.name, mode: "schema" }));
-      else if (/^exp:lp\d+$/.test(k)) el.addEventListener("click", () => { if (el.dataset.name) openFromEv(base, el.dataset.title || el.dataset.name, { type: "open_source", name: el.dataset.name }); });
-      else if (k.startsWith("smn:")) el.addEventListener("click", () => openFromEv(base + 1, el.dataset.title || k.slice(4), { type: "open_source", name: k.slice(4), mode: "schema" }));
-      else if (/^iss:[^:]+:\d+:\d+$/.test(k)) el.addEventListener("click", () => openFromEv(base + 1, "Asset", { type: "open_asset", id: k.split(":")[1] }));
+      else if (k.startsWith("sch:ref:")) on(() => openFromEv(base + 1, el.dataset.title || el.dataset.name, { type: "open_source", name: el.dataset.name, mode: "schema" }));
+      else if (/^exp:lp\d+$/.test(k)) on(() => { if (el.dataset.name) openFromEv(base, el.dataset.title || el.dataset.name, { type: "open_source", name: el.dataset.name }); });
+      else if (k.startsWith("smn:")) on(() => openFromEv(base + 1, el.dataset.title || k.slice(4), { type: "open_source", name: k.slice(4), mode: "schema" }));
+      else if (/^iss:[^:]+:\d+:\d+$/.test(k)) on(() => openFromEv(base + 1, "Asset", { type: "open_asset", id: k.split(":")[1] }));
       return;
     }
     // board tiles live in whichever column hosts the board — open into the next one
     const boardIdx = () => panels.findIndex((p) => p.isBoard);
-    if (key === "tile:schemamap") el.addEventListener("click", () => { const b = boardIdx(); openFromEv(b < 0 ? 0 : b + 1, "Schema map", { type: "open_schema" }); });
-    else if (/^sr:[^:]+$/.test(key)) el.addEventListener("click", () => { const b = boardIdx(); if (b < 0) return; const n = key.slice(3); openFromEv(b + 1, el.dataset.title || n, { type: "open_source", name: n }); });
-    else if (/^ln:[^:]+$/.test(key)) el.addEventListener("click", () => { const b = boardIdx(); if (b < 0) return; const n = "lens:" + key.slice(3); openFromEv(b + 1, el.dataset.title || n, { type: "open_source", name: n }); });
+    if (key === "tile:schemamap") on(() => { const b = boardIdx(); openFromEv(b < 0 ? 0 : b + 1, "Schema map", { type: "open_schema" }); });
+    else if (/^sr:[^:]+$/.test(key)) on(() => { const b = boardIdx(); if (b < 0) return; const n = key.slice(3); openFromEv(b + 1, el.dataset.title || n, { type: "open_source", name: n }); });
+    else if (/^ln:[^:]+$/.test(key)) on(() => { const b = boardIdx(); if (b < 0) return; const n = "lens:" + key.slice(3); openFromEv(b + 1, el.dataset.title || n, { type: "open_source", name: n }); });
     // a view card in the chat opens the same thing in depth (panel 0)
-    else if (/^item:\d+:h$/.test(key)) el.addEventListener("click", () => { if (el.dataset.ev) openFromEv(0, el.dataset.title || el.textContent, JSON.parse(el.dataset.ev)); });
+    else if (/^item:\d+:h$/.test(key)) on(() => { if (el.dataset.ev) openFromEv(0, el.dataset.title || el.textContent, JSON.parse(el.dataset.ev)); });
     // a quoted phrase under an answer opens the source it was read from
-    else if (/^item:\d+:q\d+$/.test(key)) el.addEventListener("click", () => { if (el.dataset.name) openFromEv(0, el.dataset.name, { type: "open_source", name: el.dataset.name }); });
+    else if (/^item:\d+:q\d+$/.test(key)) on(() => { if (el.dataset.name) openFromEv(0, el.dataset.name, { type: "open_source", name: el.dataset.name }); });
     // recents / starred chips in the header
-    else if (/^(rc|st):\d+$/.test(key)) el.addEventListener("click", () => { if (el.dataset.ev) openFromEv(0, el.dataset.title || "", JSON.parse(el.dataset.ev)); });
+    else if (/^(rc|st):\d+$/.test(key)) on(() => { if (el.dataset.ev) openFromEv(0, el.dataset.title || "", JSON.parse(el.dataset.ev)); });
     // finding cards on the board open the finding itself
-    else if (/^fnd:\d+$/.test(key)) el.addEventListener("click", () => {
+    else if (/^fnd:\d+$/.test(key)) on(() => {
       const b = panels.findIndex((p) => p.isBoard);
       openFromEv(b < 0 ? 0 : b + 1, "Finding", { type: "open_finding", id: Number(key.slice(4)) });
     });
     // tree nodes inside chat cards (unprefixed) open at panel 0
-    else if (/^tn:[^:]+$/.test(key)) el.addEventListener("click", () => {
+    else if (/^tn:[^:]+$/.test(key)) on(() => {
       const nm = el.querySelector(".tree-name");
       openFromEv(0, (nm ? nm.textContent : "Asset"), { type: "open_asset", id: key.slice(3) });
     });

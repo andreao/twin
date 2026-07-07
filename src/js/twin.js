@@ -403,7 +403,10 @@ const T = (() => {
       if (m.pattern) bits.push(`pattern ${m.pattern} (${m.coverage}% of rows)`);
       if (m.empty) bits.push(m.empty >= 100 ? 'always empty' : `${m.empty}% empty`);
       if (sem.description) bits.push(sem.description);
-      if (!bits.length) continue;
+      // a field the profiler had nothing to say about still EXISTS — list it with
+      // its schema type, or the agent can neither see nor annotate it and the
+      // documented-count never reaches the schema's own
+      if (!bits.length) bits.push(String((sources.get(name).schema || {})[c] || 'unprofiled'));
       out.push(`${c}: ${bits.join(' · ')}`);
     }
     return out;
@@ -1395,11 +1398,15 @@ const T = (() => {
   function openAgentPage(panel) {
     const V = viewer(panel, 'What’s happening', { type: 'open_agent' });
     agentPanels.add(V.panel);
-    // one list: the live moment on top (while the agent computes, the client
-    // mirrors the harness's status detail into it — class agent-live; between
-    // turns it reads as the last step taken), then the plan items under it.
+    // one list: the live moment on top — the same act-row grammar as the plan
+    // items, verb chip "now", pulsing while the agent computes (the client
+    // mirrors the harness's status detail into the agent-live text) — then the
+    // plan items under it.
     V.add('div', 'ag:list', null, 0); V.set('ag:list', 'class', 'agent-block');
-    V.add('div', 'ag:now', 'ag:list', 0); V.set('ag:now', 'class', 'act-detail agent-live');
+    V.add('div', 'ag:nowrow', 'ag:list', 0); V.set('ag:nowrow', 'class', 'act-row now-row');
+    V.add('span', 'ag:nowrow:v', 'ag:nowrow', 0); V.set('ag:nowrow:v', 'class', 'act-verb now-verb'); V.text('ag:nowrow:v', 'now');
+    V.add('div', 'ag:nowrow:c', 'ag:nowrow', 1); V.set('ag:nowrow:c', 'class', 'act-content');
+    V.add('div', 'ag:now', 'ag:nowrow:c', 0); V.set('ag:now', 'class', 'act-text agent-live');
     const lastStep = activityTail[activityTail.length - 1];
     V.text('ag:now', lastStep ? `last: ${stepLine(lastStep)}` : 'quiet — waiting for something to do');
     const items = [...agenda].sort((x, y) => {
@@ -1424,7 +1431,9 @@ const T = (() => {
       }
       backlog.slice(0, 5).forEach((w, bi) => {
         workRow(V, 'ag:list', `ag:bk${bi}`, bi + 1, bi ? 'then' : 'next',
-          `Document the fields of ${w.title}`, '', false, `${w.missing} fields still need a meaning`);
+          `Document the fields of ${w.title}`, '', true, `${w.missing} fields still need a meaning`);
+        // clicking a backlog row briefs the agent to take that item NOW
+        V.set(`ag:bk${bi}`, 'data-doc', w.title);
       });
     }
     let i = 1;

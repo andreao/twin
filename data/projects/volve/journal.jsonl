@@ -181,3 +181,32 @@
 {"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"field\":\"kind\",\"source\":\"witsml\",\"title\":\"Record Type\",\"description\":\"The classification of the WITSML record, such as a survey or a drill report, used to differentiate data types in the unified stream.\"}}"}
 {"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"description\":\"The horizontal direction of the wellbore measured in degrees from true north.\",\"field\":\"azi\",\"source\":\"witsml\",\"title\":\"Azimuth\"}}"}
 {"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"field\":\"incl\",\"source\":\"witsml\",\"title\":\"Inclination\",\"description\":\"The angle of the wellbore from the vertical, measured in degrees.\"}}"}
+{"k":"tool","p":"{\"tool\":\"think\",\"args\":{\"text\":\"Annotating the 'uid' field in the witsml source to provide a clear human title and description.\"}}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":67,\"title\":\"Step\",\"ts\":1783452214556,\"type\":\"open_step\"}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":66,\"title\":\"Step\",\"ts\":1783452215466,\"type\":\"open_step\"}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":65,\"title\":\"Step\",\"ts\":1783452216180,\"type\":\"open_step\"}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":66,\"title\":\"Step\",\"ts\":1783452217231,\"type\":\"open_step\"}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":66,\"title\":\"Step\",\"ts\":1783452218758,\"type\":\"open_step\"}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":66,\"title\":\"Step\",\"ts\":1783452219223,\"type\":\"open_step\"}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":66,\"title\":\"Step\",\"ts\":1783452219783,\"type\":\"open_step\"}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":65,\"title\":\"Step\",\"ts\":1783452220341,\"type\":\"open_step\"}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":65,\"title\":\"Step\",\"ts\":1783452220930,\"type\":\"open_step\"}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":65,\"title\":\"Step\",\"ts\":1783452221638,\"type\":\"open_step\"}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":65,\"title\":\"Step\",\"ts\":1783452222092,\"type\":\"open_step\"}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":65,\"title\":\"Step\",\"ts\":1783452222548,\"type\":\"open_step\"}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":65,\"title\":\"Step\",\"ts\":1783452223433,\"type\":\"open_step\"}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":65,\"title\":\"Step\",\"ts\":1783452224008,\"type\":\"open_step\"}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":65,\"title\":\"Step\",\"ts\":1783452224775,\"type\":\"open_step\"}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":65,\"title\":\"Step\",\"ts\":1783452226164,\"type\":\"open_step\"}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":65,\"title\":\"Step\",\"ts\":1783452227956,\"type\":\"open_step\"}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":65,\"title\":\"Step\",\"ts\":1783452228505,\"type\":\"open_step\"}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":65,\"title\":\"Step\",\"ts\":1783452229506,\"type\":\"open_step\"}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":65,\"title\":\"Step\",\"ts\":1783452230774,\"type\":\"open_step\"}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":65,\"title\":\"Step\",\"ts\":1783452231513,\"type\":\"open_step\"}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":65,\"title\":\"Step\",\"ts\":1783452232172,\"type\":\"open_step\"}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":67,\"title\":\"Step\",\"ts\":1783452233675,\"type\":\"open_step\"}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":67,\"title\":\"Step\",\"ts\":1783452235384,\"type\":\"open_step\"}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":66,\"title\":\"Step\",\"ts\":1783452249088,\"type\":\"open_step\"}"}
+{"k":"ev","p":"{\"n\":0,\"panel\":1,\"seq\":67,\"title\":\"Step\",\"ts\":1783452249713,\"type\":\"open_step\"}"}
+{"k":"tool","p":"{\"tool\":\"annotate\",\"args\":{\"source\":\"witsml\",\"field\":\"uid\",\"title\":\"Record ID\",\"description\":\"A unique identifier used to distinguish individual records, such as survey stations or drill reports, within the WITSML data stream.\"}}"}
+{"k":"tool","p":"{\"tool\":\"read_source\",\"args\":{\"path\":\"data/volve/real/witsml/Norway-Statoil-NO 15_$47$_9-F-4\"}}"}
